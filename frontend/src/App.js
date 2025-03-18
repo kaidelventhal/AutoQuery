@@ -12,9 +12,19 @@ function App() {
 
   return (
     <div className="App">
-      <h1>Chat Interface</h1>
+      <header>
+         <h1>AutoQuerry</h1>
+         <h2>Automotive Market Research</h2>
+      </header>
       <MessageList history={history} />
-      <ChatInput onSend={(msg) => addMessage(msg, 'user')} addMessage={addMessage} history={history} />
+      <ChatInput 
+        onSend={(msg) => addMessage(msg, 'user')}
+        addMessage={addMessage}
+        history={history}
+      />
+      <footer>
+        <p>Created by Kai Delventhal</p>
+      </footer>
     </div>
   );
 }
