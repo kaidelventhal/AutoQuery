@@ -1,0 +1,10 @@
+Flask
+Flask-Cors
+Flask-SocketIO
+pandas
+pandasql
+langchain
+langchain-google-vertexai
+pydantic
+gunicorn
+eventlet
