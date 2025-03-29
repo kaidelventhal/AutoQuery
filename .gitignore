@@ -1,5 +1,41 @@
-autoquery-450504-07c8eb3d217b.json
-tables_V2.0/
-backend/__pycache__/
+# Python
+*.py[cod]
 __pycache__/
-.gcloudignore
+*.env
+env/
+venv/
+*.egg-info/
+dist/
+build/
+wheels/
+*.so
+*.log
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-error.log
+frontend/build/
+frontend/.env
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
+
+# IDE/OS Files
+.vscode/
+.idea/
+*.DS_Store
+Thumbs.db
+
+# Secrets / Sensitive Data
+*.json # Be careful with generic rules, maybe specific key files?
+*.pem
+credentials.json # Example
+/secrets/ # Example directory
+
+# Data files (if large or shouldn't be in git)
+*.csv
+
+# Cloud SDK files
+.gcloud/

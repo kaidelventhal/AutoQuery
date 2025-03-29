@@ -18,7 +18,7 @@ def create_sql_agent():
         model="gemini-2.0-flash-lite-preview-02-05",
         temperature=0,
         convert_system_message_to_human=True,
-        project = "autoquery-450504"
+        project = "autoquery-454320"
     )
     llm_with_tools = llm.bind_tools(tools)
     
