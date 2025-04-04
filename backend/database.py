@@ -62,29 +62,33 @@ class Database:
 
     def run_query(self, query: str) -> str:
         """
-        Executes an SQL query on the loaded pandas DataFrames using pandasql.
-        Returns results as a CSV string.
+        Executes one or more SQL queries on the loaded pandas DataFrames using pandasql.
+        Returns results as a combined CSV string.
         """
         print(f"Executing pandasql query:\n{query}")
-        # Pass the dictionary of dataframes as the environment for pandasql
-        local_env = self.dataframes.copy() # Create a copy for safety
-        local_env['pd'] = pd # Make pandas available within the query if needed
+        # Copy DataFrames into the local environment and add pandas
+        local_env = self.dataframes.copy()
+        local_env['pd'] = pd
 
         try:
-            result_df = ps.sqldf(query, local_env)
-            # Convert DataFrame to CSV string
-            output = io.StringIO()
-            result_df.to_csv(output, index=False)
-            csv_output = output.getvalue()
-            print(f"Pandasql query successful, returning {len(result_df)} rows.")
-            return csv_output
+            # Split the query by semicolon and filter out empty statements.
+            queries = [q.strip() for q in query.strip().split(';') if q.strip()]
+            csv_results = []
+            for q in queries:
+                result_df = ps.sqldf(q, local_env)
+                output = io.StringIO()
+                result_df.to_csv(output, index=False)
+                csv_results.append(output.getvalue())
+            # Combine all CSV outputs (separated by a blank line)
+            combined_csv = "\n\n".join(csv_results)
+            print(f"Pandasql query successful, returning results from {len(queries)} query(ies).")
+            return combined_csv
 
         except Exception as e:
-            # Catch pandasql specific errors or general errors
             error_message = f"Pandasql Execution Error: {str(e)}"
             print(error_message)
-            # Consider how much detail to expose in the error message
             return f"Error executing query: {str(e)}"
+
 
 # Optional: Singleton pattern if desired (usually good practice for resources)
 _db_instance = None

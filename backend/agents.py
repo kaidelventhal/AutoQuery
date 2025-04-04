@@ -15,7 +15,7 @@ def create_sql_agent():
     Create and return an agent executor that uses the Gemini model with tool support.
     """
     llm = ChatVertexAI(
-        model="gemini-2.0-flash-lite-preview-02-05",
+        model="gemini-2.0-flash-lite",
         temperature=0,
         convert_system_message_to_human=True,
         project = "autoquery-454320"
