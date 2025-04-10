@@ -2,6 +2,8 @@
 
 **Live Demo:** [Access the AutoQuery AI Assistant](https://autoquery-454320.uc.r.appspot.com/)
 
+Try asking the assistant questions about the dataset to see what it can do.
+
 ## Project Description
 
 AutoQuery AI is an intelligent vehicle recommendation and query assistant deployed on Google Cloud. It helps users find vehicle information by asking questions in natural language. Leveraging Google Vertex AI's language models and LangChain for orchestration, AutoQuery AI translates user requests into SQL queries executed against a vehicle dataset stored in Google Cloud Storage.
