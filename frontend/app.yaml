@@ -1,0 +1,27 @@
+# frontend/app.yaml (for Vanilla JS version)
+runtime: static
+service: frontend # Or keep as 'default' if it's your main service
+
+handlers:
+  # Serve the CSS file
+  - url: /style\.css
+    static_files: style.css
+    upload: style\.css
+
+  # Serve the JavaScript file
+  - url: /script\.js
+    static_files: script.js
+    upload: script\.js
+
+  # Serve favicon if you added one to /public (adjust path if not in /public)
+  # - url: /favicon\.png
+  #   static_files: public/favicon.png
+  #   upload: public/favicon\.png
+
+  # Serve the main index.html for the root path and any other paths
+  - url: /.*
+    static_files: index.html
+    upload: index\.html
+
+# Optional: Redirect all traffic to HTTPS
+# secure: always

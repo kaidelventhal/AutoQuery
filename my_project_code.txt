@@ -1,0 +1,821 @@
+README.md:
+<code>
+# AutoQuery AI
+
+## Project Description
+
+AutoQuery AI is an intelligent vehicle recommendation and query assistant designed to help users find the perfect vehicle based on their preferences. Leveraging advanced natural language processing and large language models, AutoQuery AI allows users to interact with a chat-based interface to query a comprehensive vehicle sales dataset. The project utilizes Google Vertex AI, LangChain, and LangGraph to provide optimized and accurate query results.
+
+## Features
+
+- **Natural Language Interface**: Users can ask questions in plain English to find vehicles that match their criteria.
+- **Agentic AI Query Processing**: Converts natural language queries into optimized SQL queries using LLMs.
+- **Data-Driven Recommendations**: Provides personalized vehicle recommendations based on user queries and historical data.
+
+## Tech Stack
+
+- **Google Vertex AI**: For hosting and managing LLM models.
+- **LangChain & LangGraph**: For orchestrating prompt chains and optimizing queries.
+- **Python**: For data processing and backend development.
+- **PandasSQL**: For querying the dataset efficiently.
+- **Flask/Streamlit**: For building the chat interface.
+
+## Getting Started
+
+### Prerequisites
+
+- Python 3.8+
+- Pandas
+- PandasSQL
+- Flask/Streamlit
+
+### Installation
+
+1. Clone the repository:
+    ```bash
+    git clone https://github.com/yourusername/autoquery-ai.git
+    cd autoquery-ai
+    ```
+
+2. Install the required packages:
+    ```bash
+    pip install pandas pandasql flask streamlit
+    ```
+
+### Usage
+
+1. Load the datasets:
+    ```python
+    import os
+    import pandas as pd
+    import pandasql as ps
+
+    # Define your table directory
+    TABLE_DIR = 'path/to/your/csv/files'
+
+    # Load the CSV tables into pandas DataFrames
+    ad_table = pd.read_csv(os.path.join(TABLE_DIR, 'Ad_table.csv'))
+    price_table = pd.read_csv(os.path.join(TABLE_DIR, 'Price_table.csv'))
+    sales_table = pd.read_csv(os.path.join(TABLE_DIR, 'Sales_table.csv'))
+    basic_table = pd.read_csv(os.path.join(TABLE_DIR, 'Basic_table.csv'))
+    trim_table = pd.read_csv(os.path.join(TABLE_DIR, 'Trim_table.csv'))
+    img_table = pd.read_csv(os.path.join(TABLE_DIR, 'Image_table.csv'))
+    ```
+
+2. Run a sample query using PandasSQL:
+    ```python
+    query = """
+    SELECT ad_table.Maker, ad_table.Genmodel, ad_table.Reg_year, ad_table.Bodytype, ad_table.Color, ad_table.Price, price_table.Entry_price, sales_table.2018
+    FROM ad_table
+    JOIN price_table ON ad_table.Genmodel_ID = price_table.Genmodel_ID
+    JOIN sales_table ON ad_table.Genmodel_ID = sales_table.Genmodel_ID
+    WHERE ad_table.Reg_year >= 2018 AND ad_table.Bodytype = 'Sedan' AND ad_table.Color = 'Red'
+    """
+    result_df = ps.sqldf(query, locals())
+    print(result_df)
+    ```
+
+3. Develop the chat interface and integrate with LangChain for natural language to SQL conversion.
+
+## Future Enhancements
+
+- Integrate vehicle images for enriched recommendations.
+- Provide trend analytics and pricing predictions.
+- Expand the assistant to handle more complex queries and provide deeper insights.
+
+## Conclusion
+
+AutoQuery AI showcases advanced AI techniques and data science skills, making it a valuable addition to your portfolio. It demonstrates your ability to build intelligent, data-driven applications that solve real-world problems.
+
+</code>
+
+backend\agents.py:
+<code>
+# agents.py
+from langchain_google_vertexai import ChatVertexAI
+from langchain.agents import AgentExecutor
+from langchain.agents.format_scratchpad.openai_tools import format_to_openai_tool_messages
+from langchain.agents.output_parsers.openai_tools import OpenAIToolsAgentOutputParser
+from prompts import get_sql_generation_prompt
+from langchain.schema import AIMessage, HumanMessage
+from agent_tools import execute_sql
+
+# Define the list of tools available to the agent.
+tools = [execute_sql]
+
+def create_sql_agent():
+    """
+    Create and return an agent executor that uses the Gemini model with tool support.
+    """
+    llm = ChatVertexAI(
+        model="gemini-2.0-flash-lite",
+        temperature=0,
+        convert_system_message_to_human=True
+    )
+    llm_with_tools = llm.bind_tools(tools)
+    
+    prompt = get_sql_generation_prompt()
+    
+    def input_extractor(x):
+        return x["input"]
+    
+    def scratchpad_formatter(x):
+        return format_to_openai_tool_messages(x["intermediate_steps"])
+    
+    agent_components = {
+        "input": input_extractor,
+        "agent_scratchpad": scratchpad_formatter,
+        "chat_history": lambda x: x["chat_history"]
+    }
+    
+    agent = agent_components | prompt | llm_with_tools | OpenAIToolsAgentOutputParser()
+    agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
+    return agent_executor
+
+</code>
+
+backend\agent_tools.py:
+<code>
+# agent_tools.py
+from pydantic import BaseModel, Field
+from langchain.agents import tool
+from database import Database
+
+db_instance = None
+
+def set_database_instance(db):
+    global db_instance
+    db_instance = db
+
+class SQLQueryInput(BaseModel):
+    query: str = Field(..., description="The SQL query to execute on the automotive database.")
+
+@tool
+def execute_sql(query: str) -> str:
+    """
+    Execute the provided SQL query on the automotive database and return the results.
+    """
+    if db_instance is None:
+        return "Database not initialized."
+    result = db_instance.run_query(query)
+    return result
+
+</code>
+
+backend\app.py:
+<code>
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+from config import setup_credentials
+from agents import create_sql_agent
+from agent_tools import set_database_instance
+from database import Database
+from langchain.schema import AIMessage, HumanMessage
+import os
+
+# Initialize credentials and the agent
+setup_credentials()
+tables_dir = os.environ.get("TABLES_DIR")
+
+agent_executor = create_sql_agent()
+db = Database(tables_dir)
+set_database_instance(db)
+chat_history = []
+
+app = Flask(__name__)
+CORS(app)
+
+@app.route('/api/chat', methods=['POST'])
+def chat():
+    data = request.get_json()
+    # Get the user's message and any history (if provided)
+    user_input = data.get("message")
+    
+    # Build a minimal input to the agent, including an empty scratchpad (if needed)
+    agent_input = {
+        "input": user_input,
+        "chat_history": chat_history,
+        "agent_scratchpad": []
+    }
+    result = agent_executor.invoke(agent_input)
+    chat_history.append(HumanMessage(content=user_input))
+    chat_history.append(AIMessage(content=result.get("output")))
+    return jsonify({"response": result.get("output")})
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    return jsonify({"status": "ok"})
+
+if __name__ == '__main__':
+    app.run(debug=True, port=5000, host='0.0.0.0')
+
+</code>
+
+backend\app.yaml:
+<code>
+runtime: python312 # Or python311, python310 depending on dependencies
+entrypoint: gunicorn -b :$PORT -w 2 -k uvicorn.workers.UvicornWorker app:app --timeout 120 # Adjust workers/timeout
+
+instance_class: F4_1G # Or B4_1G etc. START WITH F1/B1 but increase if CSVs require more memory (e.g., F2, F4, B2, B4) - Monitor memory usage!
+
+env_variables:
+  # GCP Settings
+  GOOGLE_CLOUD_PROJECT: "autoquery-454320" # Replace with your Project ID
+  GCP_REGION: "us-central1" # e.g., us-central1 - Replace
+
+  # GCS Settings for CSV Data
+  TABLES_BUCKET: " autoquery-csv-data" # Replace - Bucket containing CSVs
+  TABLES_FOLDER: "tables_V2.0" # Replace - Folder within the bucket containing CSVs
+
+  # Optional: Secret Manager for API Key (if needed and not using ADC alone)
+  #API_KEY_SECRET_NAME: "VERTEX_AI_API_KEY" # Replace - Name of the secret
+
+# Automatic scaling settings (adjust based on expected load & memory usage)
+automatic_scaling:
+  target_cpu_utilization: 0.7
+  min_instances: 0 # Scale to zero okay if startup (including GCS download) is fast enough
+  max_instances: 5 # Adjust max instances based on budget/load
+  # Consider memory utilization targets if memory becomes the bottleneck
+  # target_memory_utilization: 0.75
+
+handlers:
+# Redirect HTTP traffic to HTTPS (Recommended)
+- url: /.*
+  script: auto
+  secure: always
+
+# Note: Removed Cloud SQL beta_settings and vpc_access_connector
+</code>
+
+backend\config.py:
+<code>
+# config.py
+import os
+
+def setup_credentials():
+    """
+    Set the GOOGLE_APPLICATION_CREDENTIALS environment variable
+    to the JSON key stored in the project directory.
+    """
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "C:/Users/kdelv/Documents/autoquery-454320-9938d7b967a6.json"
+    os.environ["TABLES_DIR"] = "C:/Users/kdelv/Documents/tables_V2.0"
+if __name__ == "__main__":
+    setup_credentials()
+
+</code>
+
+backend\database.py:
+<code>
+# database.py
+import os
+import pandas as pd
+import pandasql as ps
+
+class Database:
+    def __init__(self, tables_dir):
+        self.tables_dir = tables_dir
+        self.load_tables()
+    
+    def load_tables(self):
+        print("Loading CSV tables from:", self.tables_dir)
+        self.ad_table = pd.read_csv(os.path.join(self.tables_dir, 'Ad_table.csv'), low_memory=False)
+        self.price_table = pd.read_csv(os.path.join(self.tables_dir, 'Price_table.csv'), low_memory=False)
+        self.sales_table = pd.read_csv(os.path.join(self.tables_dir, 'Sales_table.csv'), low_memory=False)
+        self.basic_table = pd.read_csv(os.path.join(self.tables_dir, 'Basic_table.csv'), low_memory=False)
+        self.trim_table = pd.read_csv(os.path.join(self.tables_dir, 'Trim_table.csv'), low_memory=False)
+        self.img_table = pd.read_csv(os.path.join(self.tables_dir, 'Image_table.csv'), low_memory=False)
+        print("Tables loaded successfully.")
+    
+    def run_query(self, query):
+        try:
+            env = {
+                'ad_table': self.ad_table,
+                'price_table': self.price_table,
+                'sales_table': self.sales_table,
+                'basic_table': self.basic_table,
+                'trim_table': self.trim_table,
+                'img_table': self.img_table,
+                'pd': pd
+            }
+            result = ps.sqldf(query, env)
+            return result.to_csv(index=False)
+        except Exception as e:
+            return f"SQL Execution Error: {str(e)}"
+
+</code>
+
+backend\main.py:
+<code>
+# main.py
+import os
+from config import setup_credentials
+from database import Database
+from agent_tools import set_database_instance
+from agents import create_sql_agent
+from langchain.schema import AIMessage, HumanMessage
+
+def main():
+    setup_credentials()
+    
+    # Use the TABLES_DIR environment variable set in config.py.
+    tables_dir = os.environ.get("TABLES_DIR")
+    if not tables_dir:
+        raise Exception("TABLES_DIR environment variable not set.")
+    
+    db = Database(tables_dir)
+    set_database_instance(db)
+    
+    # In-memory chat history (list of LangChain message objects).
+    chat_history = []
+    
+    agent_executor = create_sql_agent()
+    
+    print("Welcome to the AutoSQL Chat Interface!")
+    print("Enter your natural language queries (type 'exit' to quit).")
+    
+    while True:
+        user_input = input("You: ").strip()
+        if user_input.lower() == "exit":
+            break
+        
+        agent_input = {
+            "input": user_input,
+            "chat_history": chat_history,
+            "agent_scratchpad": []
+        }
+        
+        result = agent_executor.invoke(agent_input)
+        agent_output = result.get("output", "No output returned.")
+        
+        print("Agent:", agent_output)
+        
+        # Update the in-memory chat history.
+        chat_history.append(HumanMessage(content=user_input))
+        chat_history.append(AIMessage(content=agent_output))
+    
+if __name__ == "__main__":
+    main()
+
+</code>
+
+backend\prompts.py:
+<code>
+# prompts.py
+from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
+
+def get_sql_generation_prompt():
+    """
+    Create a prompt template that instructs the agent to convert a natural language query
+    into a valid SQL query for the automotive database.
+    """
+    system_message = """
+        You are an AI assistant specialized in querying an automotive database.
+        Your goal is to answer user questions by generating AND executing SQL queries. Follow these guidelines:
+
+        1. Table Schemas and Relationships:
+
+        1. ad_table: Maker, Genmodel, Genmodel_ID, Adv_ID, Adv_year, Adv_month, Color, Reg_year, Bodytype, 
+        Runned_Miles, Engin_size, Gearbox, Fuel_type, Price, Engine_power, Annual_Tax, Wheelbase, Height, Width, Length, 
+        Average_mpg, Top_speed, Seat_num, Door_num.
+        2. price_table: Maker, Genmodel, Genmodel_ID, Year, Entry_price.
+        3. sales_table: Maker, Genmodel, Genmodel_ID, 2020, 2019, 2018, 2017, 2016, 2015, 2014, 2013, 2012, 2011, 2010, 2009, 2008, 2007, 2006, 2005, 2004, 2003, 2002, 2001.
+        4. basic_table: Automaker, Automaker_ID, Genmodel, Genmodel_ID.
+        5. trim_table: Genmodel_ID, Maker, Genmodel, Trim, Year, Price, Gas_emission, Fuel_type, Engine_size.
+        6. img_table: Genmodel_ID, Image_ID, Image_name, Predicted_viewpoint, Quality_check.
+
+
+        2. Common Join Keys:
+        - Primary join fields: Maker, Genmodel, Genmodel_ID
+        - Use these for table relationships:
+            * sales_table ↔ price_table: Maker, Genmodel, Genmodel_ID
+            * ad_table ↔ basic_table: Genmodel_ID
+            * trim_table ↔ basic_table: Genmodel_ID
+            * img_table ↔ other tables: Genmodel_ID
+
+        3. Best Practices:
+        - Always quote year columns (e.g., \"2018\")
+        - Use appropriate JOIN types based on data requirements
+        - Use table aliases for readability
+        - Handle NULL values appropriately
+        - Include proper WHERE clauses for filtering
+        - Use ORDER BY for sorted results
+
+        Example complex query:
+        SELECT 
+            s.Maker,
+            s.Genmodel,
+            s.\"2018\" as sales_2018,
+            p.Entry_price,
+            t.Trim,
+            t.Gas_emission,
+            ad.Bodytype,
+            ad.Engine_power
+        FROM sales_table s
+        JOIN price_table p ON s.Genmodel_ID = p.Genmodel_ID
+        LEFT JOIN trim_table t ON s.Genmodel_ID = t.Genmodel_ID AND t.Year = 2018
+        LEFT JOIN ad_table ad ON s.Genmodel_ID = ad.Genmodel_ID
+        WHERE s.\"2018\" > 0
+        ORDER BY s.\"2018\" DESC;
+        
+         **Execution Workflow:**
+        1. Analyze the user's question.
+        2. Generate the appropriate SQL query based on the schema and best practices.
+        3. **IMPORTANT:** You MUST then use the `execute_sql` tool to run this generated query against the database.
+        4. Analyze the results returned by the `execute_sql` tool.
+        5. Formulate a final, user-friendly answer based *only* on the data returned by the tool. Do not just return the raw CSV or SQL. Summarize the findings or present the data clearly. If the tool returns an error, report the error.
+
+        **Your final output should be the natural language answer derived from the executed query results, NOT the SQL query itself.**
+    
+        """
+
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", system_message),
+        MessagesPlaceholder(variable_name="chat_history"),
+        ("user", "{input}"),
+        MessagesPlaceholder(variable_name="agent_scratchpad")
+    ])
+    return prompt
+
+</code>
+
+frontend\app.yaml:
+<code>
+# frontend/app.yaml (for Vanilla JS version)
+runtime: static
+service: frontend # Or keep as 'default' if it's your main service
+
+handlers:
+  # Serve the CSS file
+  - url: /style\.css
+    static_files: style.css
+    upload: style\.css
+
+  # Serve the JavaScript file
+  - url: /script\.js
+    static_files: script.js
+    upload: script\.js
+
+  # Serve favicon if you added one to /public (adjust path if not in /public)
+  # - url: /favicon\.png
+  #   static_files: public/favicon.png
+  #   upload: public/favicon\.png
+
+  # Serve the main index.html for the root path and any other paths
+  - url: /.*
+    static_files: index.html
+    upload: index\.html
+
+# Optional: Redirect all traffic to HTTPS
+# secure: always
+</code>
+
+frontend\index.html:
+<code>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AutoQuery AI</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>AutoQuery AI</h1>
+            <h2>Vehicle Data Query Assistant</h2>
+        </header>
+
+        <div class="chat-window">
+            <ul id="message-list">
+                <!-- Messages will be added here by JavaScript -->
+            </ul>
+        </div>
+
+        <div id="loading-indicator" class="loading" style="display: none;">
+            <span>Agent thinking...</span>
+        </div>
+
+         <div id="error-display" class="error-message" style="display: none;">
+             <!-- Errors will be shown here -->
+         </div>
+
+        <form id="chat-form" class="chat-input-area">
+            <input type="text" id="message-input" placeholder="Ask about vehicle data..." required autocomplete="off">
+            <button type="submit" id="send-button">Send</button>
+        </form>
+
+        <footer>
+            <p>Powered by Google Vertex AI & LangChain</p>
+        </footer>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
+</code>
+
+frontend\script.js:
+<code>
+document.addEventListener('DOMContentLoaded', () => {
+    const messageList = document.getElementById('message-list');
+    const chatForm = document.getElementById('chat-form');
+    const messageInput = document.getElementById('message-input');
+    const sendButton = document.getElementById('send-button');
+    const loadingIndicator = document.getElementById('loading-indicator');
+    const errorDisplay = document.getElementById('error-display');
+
+    // --- Configuration ---
+    // Define API URL (could be read from meta tag or config object if needed later)
+    const API_URL = 'http://localhost:5000/api/chat'; // Use relative path if served by same App Engine app potentially,
+                               // or set full URL if backend is separate service:
+                               // const API_URL = 'YOUR_BACKEND_DEPLOYED_URL/api/chat';
+
+    // In-memory chat history
+    let chatHistory = [
+        { sender: 'agent', message: 'Welcome to AutoQuery AI! How can I help you find vehicle data today?' }
+    ];
+
+    // --- Functions ---
+
+    /** Renders messages from chatHistory to the DOM */
+    function renderMessages() {
+        messageList.innerHTML = ''; // Clear existing messages
+        chatHistory.forEach(msg => {
+            const listItem = document.createElement('li');
+            listItem.classList.add('message');
+            listItem.classList.add(msg.sender === 'user' ? 'user-message' : 'agent-message');
+
+            // Use textContent to prevent potential XSS from agent response if it contained HTML
+            // If markdown is NEEDED, a library like 'marked' or 'showdown' could be added,
+            // but for simplicity, we'll render as text.
+            listItem.textContent = msg.message;
+
+            messageList.appendChild(listItem);
+        });
+        // Scroll to the bottom
+        messageList.scrollTop = messageList.scrollHeight;
+    }
+
+    /** Displays error messages */
+    function displayError(errorMessage) {
+        errorDisplay.textContent = `Error: ${errorMessage}`;
+        errorDisplay.style.display = 'block';
+         loadingIndicator.style.display = 'none'; // Hide loading if error occurs
+    }
+
+    /** Hides the error display */
+    function clearError() {
+         errorDisplay.textContent = '';
+         errorDisplay.style.display = 'none';
+    }
+
+    /** Sends message to backend API */
+    async function sendMessageToApi(userMessage) {
+        loadingIndicator.style.display = 'block';
+        clearError();
+        setInteractionState(true); // Disable input
+
+        // Prepare history for API (simple array of objects)
+        const historyForApi = chatHistory.map(h => ({
+            sender: h.sender,
+            message: h.message
+        }));
+
+        try {
+            const response = await fetch(API_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    message: userMessage,
+                    history: historyForApi, // Send current history
+                }),
+            });
+
+            if (!response.ok) {
+                 let errorMsg = `Request failed (${response.status})`;
+                 try {
+                     const errorData = await response.json();
+                     errorMsg = errorData.error || errorMsg;
+                 } catch (e) { /* Ignore if no JSON body */ }
+                 throw new Error(errorMsg);
+            }
+
+            const data = await response.json();
+
+            // Add agent response to history and re-render
+            chatHistory.push({ sender: 'agent', message: data.response || "Received empty response." });
+            renderMessages();
+
+        } catch (error) {
+            console.error('API Error:', error);
+            displayError(error.message || 'Could not connect to the agent.');
+            // Optional: remove the user's message if API call failed?
+        } finally {
+             loadingIndicator.style.display = 'none';
+             setInteractionState(false); // Re-enable input
+        }
+    }
+
+    /** Enables/Disables input field and send button */
+    function setInteractionState(disabled) {
+         messageInput.disabled = disabled;
+         sendButton.disabled = disabled;
+    }
+
+
+    // --- Event Listeners ---
+
+    chatForm.addEventListener('submit', (event) => {
+        event.preventDefault(); // Prevent page reload
+        const userMessage = messageInput.value.trim();
+
+        if (userMessage) {
+            // Add user message to history and render
+            chatHistory.push({ sender: 'user', message: userMessage });
+            renderMessages();
+            messageInput.value = ''; // Clear input field
+
+            // Send message to backend
+            sendMessageToApi(userMessage);
+        }
+    });
+
+    // --- Initial Render ---
+    renderMessages();
+
+}); // End DOMContentLoaded
+</code>
+
+frontend\style.css:
+<code>
+body {
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+    background-color: #1a1d21; /* Dark background */
+    color: #e0e0e0; /* Light text */
+    margin: 0;
+    padding: 0;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start; /* Align container to top */
+    min-height: 100vh;
+    padding-top: 20px; /* Add some space at the top */
+}
+
+.container {
+    width: 100%;
+    max-width: 700px; /* Limit width */
+    background-color: #282c34; /* Slightly lighter dark */
+    border-radius: 8px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+}
+
+header {
+    text-align: center;
+    margin-bottom: 15px;
+    border-bottom: 1px solid #444;
+    padding-bottom: 15px;
+}
+
+header h1 {
+    margin: 0 0 5px 0;
+    color: #61dafb; /* React-like blue */
+}
+
+header h2 {
+    margin: 0;
+    font-size: 1.1em;
+    font-weight: 400;
+    color: #aaa;
+}
+
+.chat-window {
+    height: 60vh; /* Fixed height for chat */
+    overflow-y: auto; /* Enable scrolling */
+    border: 1px solid #444;
+    border-radius: 5px;
+    margin-bottom: 15px;
+    padding: 10px;
+    background-color: #1e1f22; /* Darker chat background */
+    display: flex; /* Needed for scroll behavior */
+    flex-direction: column; /* Stack messages */
+}
+
+#message-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    flex-grow: 1; /* Allow list to grow */
+}
+
+.message {
+    margin-bottom: 12px;
+    padding: 8px 12px;
+    border-radius: 15px; /* Bubble effect */
+    max-width: 80%;
+    word-wrap: break-word; /* Prevent long words from overflowing */
+    line-height: 1.4;
+}
+
+.user-message {
+    background-color: #007bff; /* Blue for user */
+    color: white;
+    align-self: flex-end; /* Align user messages to right */
+    border-bottom-right-radius: 4px; /* Flatten one corner */
+    margin-left: auto; /* Push to right */
+}
+
+.agent-message {
+    background-color: #495057; /* Gray for agent */
+    color: white;
+    align-self: flex-start; /* Align agent messages to left */
+    border-bottom-left-radius: 4px; /* Flatten one corner */
+    margin-right: auto; /* Push to left */
+}
+
+.agent-message strong, .user-message strong {
+    display: block;
+    font-size: 0.8em;
+    margin-bottom: 4px;
+    opacity: 0.8;
+}
+
+.chat-input-area {
+    display: flex;
+    margin-top: 10px; /* Space above input */
+}
+
+#message-input {
+    flex-grow: 1;
+    padding: 10px;
+    border: 1px solid #555;
+    border-radius: 4px 0 0 4px; /* Combine with button */
+    background-color: #333;
+    color: #eee;
+    font-size: 1em;
+    outline: none; /* Remove default outline */
+}
+#message-input:focus {
+     border-color: #007bff;
+}
+
+
+#send-button {
+    padding: 10px 15px;
+    border: none;
+    background-color: #007bff;
+    color: white;
+    cursor: pointer;
+    border-radius: 0 4px 4px 0; /* Combine with input */
+    font-size: 1em;
+    transition: background-color 0.2s ease;
+}
+
+#send-button:hover {
+    background-color: #0056b3;
+}
+
+#send-button:disabled {
+    background-color: #555;
+    cursor: not-allowed;
+}
+#message-input:disabled {
+     background-color: #444;
+}
+
+.loading, .error-message {
+    text-align: center;
+    padding: 8px;
+    margin-top: 10px;
+    font-style: italic;
+    border-radius: 4px;
+}
+
+.loading {
+    color: #aaa;
+}
+
+.error-message {
+    color: #ff6b6b; /* Red for errors */
+    background-color: #4d2020;
+    border: 1px solid #7a3b3b;
+    font-style: normal;
+    font-weight: bold;
+}
+
+footer {
+    text-align: center;
+    margin-top: 20px;
+    font-size: 0.85em;
+    color: #777;
+    border-top: 1px solid #444;
+    padding-top: 15px;
+}
+</code>
+

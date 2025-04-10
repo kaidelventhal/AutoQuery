@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AutoQuery AI</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>AutoQuery AI</h1>
+            <h2>Vehicle Data Query Assistant</h2>
+        </header>
+
+        <div class="chat-window">
+            <ul id="message-list">
+                <!-- Messages will be added here by JavaScript -->
+            </ul>
+        </div>
+
+        <div id="loading-indicator" class="loading" style="display: none;">
+            <span>Agent thinking...</span>
+        </div>
+
+         <div id="error-display" class="error-message" style="display: none;">
+             <!-- Errors will be shown here -->
+         </div>
+
+        <form id="chat-form" class="chat-input-area">
+            <input type="text" id="message-input" placeholder="Ask about vehicle data..." required autocomplete="off">
+            <button type="submit" id="send-button">Send</button>
+        </form>
+
+        <footer>
+            <p>Powered by Google Vertex AI & LangChain</p>
+        </footer>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
