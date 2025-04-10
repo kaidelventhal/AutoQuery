@@ -2,90 +2,250 @@ README.md:
 <code>
 # AutoQuery AI
 
+**Live Demo:** [Access the AutoQuery AI Assistant](https://autoquery-454320.uc.r.appspot.com/)
+
 ## Project Description
 
-AutoQuery AI is an intelligent vehicle recommendation and query assistant designed to help users find the perfect vehicle based on their preferences. Leveraging advanced natural language processing and large language models, AutoQuery AI allows users to interact with a chat-based interface to query a comprehensive vehicle sales dataset. The project utilizes Google Vertex AI, LangChain, and LangGraph to provide optimized and accurate query results.
+AutoQuery AI is an intelligent vehicle recommendation and query assistant deployed on Google Cloud. It helps users find vehicle information by asking questions in natural language. Leveraging Google Vertex AI's language models and LangChain for orchestration, AutoQuery AI translates user requests into SQL queries executed against a vehicle dataset stored in Google Cloud Storage.
 
-## Features
+## How It Works
 
-- **Natural Language Interface**: Users can ask questions in plain English to find vehicles that match their criteria.
-- **Agentic AI Query Processing**: Converts natural language queries into optimized SQL queries using LLMs.
-- **Data-Driven Recommendations**: Provides personalized vehicle recommendations based on user queries and historical data.
+1.  **Frontend Interaction:** Users interact with a simple web interface (HTML/CSS/JavaScript) served by Google App Engine.
+2.  **API Request:** User messages are sent to a backend API built with Flask and deployed as a separate App Engine service.
+3.  **Agent Processing:** The Flask backend uses a LangChain `AgentExecutor`. This agent is powered by a Google Vertex AI LLM (currently configured with Gemini Flash Lite).
+4.  **Prompting & Schema:** The agent receives the user query along with a detailed system prompt containing:
+    * Instructions on how to behave.
+    * The exact database schema (table names, column names, data types).
+    * Rules for generating SQL (case-insensitivity, handling specific column names like `Maker` vs `Automaker`, single-statement execution).
+    * Guidance on validating user input against known data (e.g., checking model names).
+5.  **SQL Generation:** Based on the user query and its prompt, the LLM generates a single `pandasql` (SQLite syntax) query.
+6.  **Tool Execution:** The agent invokes a custom LangChain tool (`execute_sql`).
+7.  **Data Querying:**
+    * The `execute_sql` tool uses the `pandasql` library.
+    * `pandasql` runs the generated SQL query against Pandas DataFrames.
+    * These DataFrames are loaded into memory by the backend application *on startup* from CSV files stored in a Google Cloud Storage (GCS) bucket.
+8.  **Result Formatting:** The tool returns the query results as a CSV-formatted string (or an error message) back to the agent.
+9.  **Response Generation:** The agent analyzes the tool's output (the CSV data or error) and formulates a final, user-friendly natural language response.
+10. **API Response:** The Flask backend sends the agent's response back to the frontend, which displays it to the user.
+
+## Example Prompts to Try
+
+Here are a few example questions you can ask to test the agent's capabilities:
+
+* **Simple Lookup & Sorting:**
+    * `What was the top selling car in 2015?`
+    * `What car had the largest engine size?`
+    * `Which car has the highest top speed?`
+* **Filtering:**
+    * `Show me red Ford Fiesta cars registered after 2018` (Tests case-insensitivity)
+    * `List BMW cars registered in 2020 with less than 10000 miles`
+    * `Find cars with an automatic gearbox and more than 200 engine power`
+* **Joins / Combining Info (Implicit):**
+    * `What was the entry price for a Ford Focus in 2019?` (Uses `price_table`)
+    * `Show sales data for the Ford F150 in 2016` (Tests model name handling "F150")
+* **Testing Limitations:**
+    * `List the top selling cars for 2018 and 2019` (Agent should state it can only do one year at a time)
+    * `What data do you have for the 'CyberTruck' model?` (Agent should report no data found if it's not in the tables)
+
+Feel free to experiment with different combinations of makes, models, years, colors, features, etc.!
 
 ## Tech Stack
 
-- **Google Vertex AI**: For hosting and managing LLM models.
-- **LangChain & LangGraph**: For orchestrating prompt chains and optimizing queries.
-- **Python**: For data processing and backend development.
-- **PandasSQL**: For querying the dataset efficiently.
-- **Flask/Streamlit**: For building the chat interface.
+* **Cloud Platform:** Google Cloud
+    * **Compute:** App Engine Standard (Python 3.12 Runtime)
+    * **Storage:** Cloud Storage (for CSV data)
+    * **AI:** Vertex AI (Gemini Flash Lite Model)
+* **Backend:**
+    * **Language:** Python
+    * **Framework:** Flask
+    * **Web Server:** Gunicorn (with `gthread` workers)
+    * **API Communication:** Flask-CORS
+* **AI Orchestration:** LangChain (AgentExecutor, Tools, Prompts)
+* **Data Querying:** Pandas, Pandasql
+* **Frontend:** HTML, CSS, Vanilla JavaScript
 
-## Getting Started
+## Key Features
+
+* **Natural Language Interface**: Ask questions in plain English to query vehicle data.
+* **Agentic SQL Generation**: Converts natural language to `pandasql` queries using an LLM agent.
+* **Cloud-Native Deployment**: Runs efficiently on Google App Engine, utilizing Cloud Storage for data.
+* **Error Handling**: Agent attempts to identify and report SQL execution errors.
+
+## Getting Started (for Contributors)
+
+While the primary way to use the app is via the live demo link above, contributors wishing to run or modify the code locally can follow these steps:
 
 ### Prerequisites
 
-- Python 3.8+
-- Pandas
-- PandasSQL
-- Flask/Streamlit
+* Python 3.10+
+* Google Cloud SDK (`gcloud`) installed and authenticated (`gcloud auth login`, `gcloud auth application-default login`)
+* A Google Cloud Project with Billing enabled.
+* APIs Enabled: App Engine Admin, Vertex AI, Cloud Storage, Cloud Build.
+* A GCS Bucket containing the required CSV data files (`Ad_table.csv`, `Price_table.csv`, etc.) in a specific folder structure (e.g., `tables_V2.0/`).
 
 ### Installation
 
-1. Clone the repository:
+1.  Clone the repository:
     ```bash
-    git clone https://github.com/yourusername/autoquery-ai.git
+    git clone [https://github.com/yourusername/autoquery-ai.git](https://github.com/yourusername/autoquery-ai.git) # Replace with your repo URL
     cd autoquery-ai
     ```
-
-2. Install the required packages:
+2.  Set up a Python virtual environment (recommended):
     ```bash
-    pip install pandas pandasql flask streamlit
+    python -m venv venv
+    source venv/bin/activate # Linux/macOS
+    # venv\Scripts\activate # Windows
     ```
-
-### Usage
-
-1. Load the datasets:
-    ```python
-    import os
-    import pandas as pd
-    import pandasql as ps
-
-    # Define your table directory
-    TABLE_DIR = 'path/to/your/csv/files'
-
-    # Load the CSV tables into pandas DataFrames
-    ad_table = pd.read_csv(os.path.join(TABLE_DIR, 'Ad_table.csv'))
-    price_table = pd.read_csv(os.path.join(TABLE_DIR, 'Price_table.csv'))
-    sales_table = pd.read_csv(os.path.join(TABLE_DIR, 'Sales_table.csv'))
-    basic_table = pd.read_csv(os.path.join(TABLE_DIR, 'Basic_table.csv'))
-    trim_table = pd.read_csv(os.path.join(TABLE_DIR, 'Trim_table.csv'))
-    img_table = pd.read_csv(os.path.join(TABLE_DIR, 'Image_table.csv'))
+3.  Install required packages:
+    ```bash
+    pip install -r backend/requirements.txt
     ```
-
-2. Run a sample query using PandasSQL:
-    ```python
-    query = """
-    SELECT ad_table.Maker, ad_table.Genmodel, ad_table.Reg_year, ad_table.Bodytype, ad_table.Color, ad_table.Price, price_table.Entry_price, sales_table.2018
-    FROM ad_table
-    JOIN price_table ON ad_table.Genmodel_ID = price_table.Genmodel_ID
-    JOIN sales_table ON ad_table.Genmodel_ID = sales_table.Genmodel_ID
-    WHERE ad_table.Reg_year >= 2018 AND ad_table.Bodytype = 'Sedan' AND ad_table.Color = 'Red'
-    """
-    result_df = ps.sqldf(query, locals())
-    print(result_df)
+4.  **Configure Environment Variables (Crucial for Local Backend):**
+    Set the following environment variables in your local terminal session *before* running the backend:
+    ```bash
+    export GOOGLE_CLOUD_PROJECT="your-gcp-project-id"
+    export TABLES_BUCKET="your-gcs-bucket-name"
+    export TABLES_FOLDER="your-folder-in-bucket" # e.g., tables_V2.0 or "" if root
+    # Use 'set' instead of 'export' on Windows Command Prompt
+    # Use '$env:VAR_NAME = "value"' in PowerShell
     ```
+    *(Ensure your local machine is authenticated via `gcloud auth application-default login` for the backend to access GCS and Vertex AI).*
 
-3. Develop the chat interface and integrate with LangChain for natural language to SQL conversion.
+### Local Usage
+
+1.  **Run Backend:**
+    ```bash
+    # Navigate to the backend directory
+    cd backend
+    # Run using Flask's development server (for testing, less robust than gunicorn)
+    flask run --host=0.0.0.0 --port=5000
+    # OR run with gunicorn locally (mimics App Engine better)
+    # gunicorn -b 0.0.0.0:5000 -w 1 -k gthread app:app --log-level debug
+    ```
+2.  **Run Frontend:**
+    * Open `frontend/index.html` directly in your browser (will likely fail due to CORS if backend isn't on `localhost:5000`).
+    * OR use a simple local web server (like Python's `http.server` or VS Code Live Server) from the `frontend` directory. You may need to adjust the `API_URL` in `script.js` temporarily to `http://localhost:5000/api/chat` for local testing. Remember to change it back before deploying the frontend.
+
+## Deployment
+
+The application is designed for Google App Engine Standard Environment using two services:
+
+1.  **`backend` Service:** Runs the Python/Flask application defined in `backend/app.yaml`. Deployed via `gcloud app deploy backend/app.yaml`.
+2.  **`default` Service (or `frontend`):** Serves the static frontend files (HTML/CSS/JS) defined in `frontend/app.yaml`. Deployed via `gcloud app deploy frontend/app.yaml`.
+
+*(Ensure `app.yaml` files have correct project IDs, environment variables, and instance classes before deploying.)*
 
 ## Future Enhancements
 
-- Integrate vehicle images for enriched recommendations.
-- Provide trend analytics and pricing predictions.
-- Expand the assistant to handle more complex queries and provide deeper insights.
+* **React Frontend:** Migrate the frontend from Vanilla JS to React for a more modern, component-based UI, better state management, and easier development of complex features.
+* **Improved Agentic Ability:**
+    * **Multi-Step Reasoning:** Implement frameworks like LangGraph to allow the agent to perform multiple sequential `execute_sql` calls for complex requests (e.g., comparing data across years, complex validation steps).
+    * **Error Recovery:** Enhance the agent's ability to automatically correct and retry failed SQL queries based on error messages.
+    * **Data Visualization:** Add capabilities for the agent to generate simple charts or summaries based on query results.
+    * **Image Integration:** Utilize the `img_table` to display relevant vehicle images alongside query results.
+* **Enhanced Security:**
+    * **Authentication:** Add user login/authentication (e.g., using Google Identity Platform or Firebase Auth) if multi-user support or data protection is needed.
+    * **Input Sanitization:** Implement stricter validation and sanitization on user inputs and potentially LLM outputs.
+    * **Secrets Management:** Use Google Secret Manager for any API keys or sensitive configuration if needed (currently relies on ADC).
+    * **Stricter CORS:** Configure `Flask-CORS` to only allow requests specifically from the deployed frontend origin instead of `*`.
+    * **Rate Limiting:** Implement API rate limiting (e.g., using `Flask-Limiter`) to prevent abuse.
+* **Data Backend Migration:** For improved performance, scalability, and reduced memory usage (allowing smaller App Engine instances), migrate the data from GCS CSV files + Pandas DataFrames to a dedicated database like Google Cloud SQL (PostgreSQL/MySQL) or potentially BigQuery. This would require replacing `pandasql` with standard SQL querying libraries (like SQLAlchemy or database-specific connectors).
 
 ## Conclusion
 
-AutoQuery AI showcases advanced AI techniques and data science skills, making it a valuable addition to your portfolio. It demonstrates your ability to build intelligent, data-driven applications that solve real-world problems.
+AutoQuery AI demonstrates the power of combining LLMs (Vertex AI), orchestration frameworks (LangChain), cloud services (GCP App Engine, GCS), and data manipulation libraries (Pandas, Pandasql) to create interactive, data-driven applications. It showcases skills in backend development, API design, cloud deployment, and AI integration.
+</code>
+
+test.py:
+<code>
+import os
+import pandas as pd
+import pandasql as ps
+
+# === SETUP: Define your table directory and load CSV files ===
+
+# Update this path to the location of your downloaded DVM-CAR tables
+TABLE_DIR = r'C:\Users\kdelv\Documents\tables_V2.0'
+
+# Load the CSV tables into pandas DataFrames
+ad_table = pd.read_csv(os.path.join(TABLE_DIR, 'Ad_table.csv'))
+price_table = pd.read_csv(os.path.join(TABLE_DIR, 'Price_table.csv'))
+sales_table = pd.read_csv(os.path.join(TABLE_DIR, 'Sales_table.csv'))
+basic_table = pd.read_csv(os.path.join(TABLE_DIR, 'Basic_table.csv'))
+trim_table = pd.read_csv(os.path.join(TABLE_DIR, 'Trim_table.csv'))
+img_table = pd.read_csv(os.path.join(TABLE_DIR, 'Image_table.csv'))
+
+# === FUNCTION: Run SQL queries on the DataFrames using pandasql ===
+
+def run_query(query, env):
+    """
+    Executes an SQL query on pandas DataFrames using pandasql.
+    
+    :param query: SQL query string.
+    :param env: Dictionary containing the environment variables (e.g., DataFrames).
+    :return: A DataFrame with the query results.
+    """
+    return ps.sqldf(query, env)
+
+# === FUNCTION: Dummy natural language to SQL converter ===
+
+def simulate_nl_to_sql(nl_query):
+    """
+    Dummy function to simulate the conversion of a natural language query to an SQL query.
+    In a production version, replace this function with one that uses an LLM (via LangChain or similar)
+    to generate SQL queries.
+    
+    :param nl_query: A natural language query string.
+    :return: An SQL query string.
+    """
+    nl_query_lower = nl_query.lower()
+    if "2018" in nl_query_lower and "saloon" in nl_query_lower:
+        sql_query = """
+        SELECT * FROM ad_table
+        WHERE Reg_year = 2018 AND Bodytype = 'Saloon'
+        """
+    elif "price" in nl_query_lower:
+        sql_query = """
+        SELECT a.Genmodel_ID, a.Maker, a.Genmodel, p.Year, p.Price
+        FROM ad_table AS a
+        JOIN price_table AS p ON a.Genmodel_ID = p.Genmodel_ID
+        WHERE p.Year = 2018
+        """
+    else:
+        sql_query = "SELECT * FROM ad_table LIMIT 5"
+    
+    return sql_query
+
+# === MAIN FUNCTION: Interactive Query Agent ===
+
+def main():
+    print("Welcome to AutoSensei Query Interface!")
+    print("Enter your natural language query to retrieve data from the automotive database.")
+    print("Type 'exit' to quit.\n")
+    
+    while True:
+        nl_query = input("Your query: ").strip()
+        if nl_query.lower() == 'exit':
+            print("Exiting. Thank you!")
+            break
+        
+        # Convert the natural language query to an SQL query.
+        # (Later, integrate with an LLM-powered conversion using LangChain)
+        sql_query = simulate_nl_to_sql(nl_query)
+        print("\n[DEBUG] Generated SQL Query:")
+        print(sql_query)
+        
+        # Run the SQL query using pandasql.
+        # Passing globals() gives pandasql access to your DataFrames.
+        try:
+            result_df = run_query(sql_query, globals())
+            print("\nQuery Results:")
+            print(result_df.head(), "\n")
+        except Exception as e:
+            print("Error executing query:", e)
+
+if __name__ == "__main__":
+    main()
 
 </code>
 
@@ -110,7 +270,8 @@ def create_sql_agent():
     llm = ChatVertexAI(
         model="gemini-2.0-flash-lite",
         temperature=0,
-        convert_system_message_to_human=True
+        convert_system_message_to_human=True,
+        project = "autoquery-454320"
     )
     llm_with_tools = llm.bind_tools(tools)
     
@@ -139,112 +300,190 @@ backend\agent_tools.py:
 # agent_tools.py
 from pydantic import BaseModel, Field
 from langchain.agents import tool
-from database import Database
+# Remove the incorrect import: from database import get_db_instance
+from database import Database # Ensure Database class is imported if needed for type hinting, but not essential here
 
+# This global variable will hold the database instance set by app.py
 db_instance = None
 
-def set_database_instance(db):
+def set_database_instance(db: Database):
+    """Sets the shared database instance."""
     global db_instance
+    print(f"Setting database instance in agent_tools: {type(db)}") # Add print for debugging
     db_instance = db
 
 class SQLQueryInput(BaseModel):
     query: str = Field(..., description="The SQL query to execute on the automotive database.")
 
-@tool
+@tool #removed(args_schema=SQLQueryInput) because args schema is not defined in the tool call in the agents.py file
 def execute_sql(query: str) -> str:
     """
-    Execute the provided SQL query on the automotive database and return the results.
+    Execute the provided SQL query on the automotive database and return the results as CSV.
+    Use this tool to run SELECT queries against the available tables (ad_table, price_table, sales_table, etc.).
+    Provide the complete SQL query as the input string.
     """
+    print(f"Executing SQL via tool. DB instance type: {type(db_instance)}") # Add print for debugging
     if db_instance is None:
-        return "Database not initialized."
-    result = db_instance.run_query(query)
-    return result
-
+        print("Error: execute_sql called but database instance is None.") # Add print for debugging
+        return "Error: Database not initialized in the application."
+    try:
+        # Assuming db_instance is an instance of your Database class
+        result_csv = db_instance.run_query(query)
+        # Ensure the result is a string. run_query already returns CSV string or error string.
+        if isinstance(result_csv, str):
+             # Limit result size to prevent excessively large responses if necessary
+             max_length = 5000 # Example limit, adjust as needed
+             if len(result_csv) > max_length:
+                  return result_csv[:max_length] + "\n... (results truncated)"
+             return result_csv
+        else:
+             # Should not happen if run_query works as expected, but handle just in case
+             return "Error: Query execution returned an unexpected data type."
+    except Exception as e:
+        print(f"Error during execute_sql: {e}") # Log exception
+        # Return a user-friendly error message
+        return f"Error executing SQL query: {str(e)}"
 </code>
 
 backend\app.py:
 <code>
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from config import setup_credentials
+# from config import setup_credentials # Removed - No longer needed
 from agents import create_sql_agent
 from agent_tools import set_database_instance
-from database import Database
+from database import Database # Keep this
 from langchain.schema import AIMessage, HumanMessage
 import os
+import logging # Optional: Improve logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
 
 # Initialize credentials and the agent
-setup_credentials()
-tables_dir = os.environ.get("TABLES_DIR")
+# setup_credentials() # Removed - ADC handles this
+
+# --- Get GCS configuration from App Engine Environment Variables ---
+gcs_bucket_name = os.environ.get("TABLES_BUCKET")
+gcs_folder_path = os.environ.get("TABLES_FOLDER") # Can be empty string if files are in bucket root
+
+if not gcs_bucket_name:
+    logging.error("FATAL: TABLES_BUCKET environment variable not set.")
+    # Decide how to handle this - exit or try to run degraded?
+    # For now, we'll let the Database class raise an error later.
+    pass
 
 agent_executor = create_sql_agent()
-db = Database(tables_dir)
-set_database_instance(db)
-chat_history = []
+
+# --- Initialize Database with GCS config ---
+try:
+    db = Database(bucket_name=gcs_bucket_name, folder_path=gcs_folder_path)
+    set_database_instance(db)
+    logging.info("Database initialized successfully from GCS.")
+except Exception as e:
+    logging.error(f"FATAL: Failed to initialize database from GCS: {e}")
+    # Handle inability to start - maybe return errors on API calls
+    db = None # Ensure db is None if initialization fails
+    set_database_instance(None)
+
+# --- In-memory chat history (Simple approach) ---
+# Note: This history is lost if the instance restarts or scales down/up.
+# For persistent history across requests/instances, you'd need an external store
+# (like Firestore, Memorystore, or a database).
+chat_history = [] # Global variable
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/api/*": {"origins": "*"}})
 
-@app.route('/api/chat', methods=['POST'])
+@app.route('/api/chat', methods=['POST', 'OPTIONS'])
 def chat():
+    global chat_history # <<< ADD THIS LINE
+
+    # Handle OPTIONS (though CORS should intercept)
+    if request.method == 'OPTIONS':
+         logging.info("Received OPTIONS request for /api/chat - Flask-CORS should have handled this.")
+         resp = app.make_default_options_response()
+         # Add headers Flask-CORS would have added
+         h = resp.headers
+         h['Access-Control-Allow-Origin'] = '*'
+         h['Access-Control-Allow-Methods'] = resp.headers.get('Allow', 'POST, OPTIONS')
+         h['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+         h['Access-Control-Max-Age'] = '86400'
+         return resp
+
+    # --- Handle POST request ---
+    if db is None or getattr(db, 'ad_table', None) is None:
+         logging.error("Chat request (POST) received but database is not ready.")
+         return jsonify({"error": "Server error: Database not available or not loaded correctly."}), 503
+
     data = request.get_json()
-    # Get the user's message and any history (if provided)
+    if not data or "message" not in data:
+        return jsonify({"error": "Missing 'message' in request body"}), 400
+
     user_input = data.get("message")
-    
-    # Build a minimal input to the agent, including an empty scratchpad (if needed)
+    logging.info(f"Received chat message (POST): {user_input}")
+
+    # Now it correctly reads the global chat_history
     agent_input = {
         "input": user_input,
         "chat_history": chat_history,
-        "agent_scratchpad": []
     }
-    result = agent_executor.invoke(agent_input)
-    chat_history.append(HumanMessage(content=user_input))
-    chat_history.append(AIMessage(content=result.get("output")))
-    return jsonify({"response": result.get("output")})
 
-@app.route('/health', methods=['GET'])
-def health_check():
-    return jsonify({"status": "ok"})
+    try:
+        if agent_executor is None:
+             logging.error("Agent executor not initialized.")
+             return jsonify({"error": "Server error: Agent not available."}), 503
+
+        result = agent_executor.invoke(agent_input)
+        response_content = result.get("output", "Agent did not return an output.")
+
+        # Now it correctly modifies the global chat_history
+        chat_history.append(HumanMessage(content=user_input))
+        chat_history.append(AIMessage(content=response_content))
+        max_history = 20
+        if len(chat_history) > max_history:
+            chat_history = chat_history[-max_history:] # Assignment is fine now
+
+        logging.info(f"Agent response: {response_content}")
+        return jsonify({"response": response_content})
+
+    except Exception as e:
+        logging.error(f"Error during agent invocation: {e}", exc_info=True)
+        return jsonify({"error": f"An internal error occurred during agent processing: {e}"}), 500
+    # --- End POST request handling ---
+
+# ... (health_check function and __main__ block remain the same) ...
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000, host='0.0.0.0')
+    app.run(debug=False, port=int(os.environ.get('PORT', 8080)), host='0.0.0.0')
 
 </code>
 
 backend\app.yaml:
 <code>
-runtime: python312 # Or python311, python310 depending on dependencies
-entrypoint: gunicorn -b :$PORT -w 2 -k uvicorn.workers.UvicornWorker app:app --timeout 120 # Adjust workers/timeout
+runtime: python312
+service: backend
+# --- UPDATED ENTRYPOINT ---
+entrypoint: gunicorn -b :$PORT -w 2 --threads 4 -k gthread app:app --timeout 120 --log-level info # Changed worker to gthread
 
-instance_class: F4_1G # Or B4_1G etc. START WITH F1/B1 but increase if CSVs require more memory (e.g., F2, F4, B2, B4) - Monitor memory usage!
+instance_class: F4_1G # Keep F4 for memory
 
 env_variables:
-  # GCP Settings
-  GOOGLE_CLOUD_PROJECT: "autoquery-454320" # Replace with your Project ID
-  GCP_REGION: "us-central1" # e.g., us-central1 - Replace
+  GOOGLE_CLOUD_PROJECT: "autoquery-454320"
+  TABLES_BUCKET: "autoquery-csv-data"
+  TABLES_FOLDER: "tables_V2.0"
+  # GCP_REGION: "us-central1" # Optional
 
-  # GCS Settings for CSV Data
-  TABLES_BUCKET: " autoquery-csv-data" # Replace - Bucket containing CSVs
-  TABLES_FOLDER: "tables_V2.0" # Replace - Folder within the bucket containing CSVs
-
-  # Optional: Secret Manager for API Key (if needed and not using ADC alone)
-  #API_KEY_SECRET_NAME: "VERTEX_AI_API_KEY" # Replace - Name of the secret
-
-# Automatic scaling settings (adjust based on expected load & memory usage)
 automatic_scaling:
-  target_cpu_utilization: 0.7
-  min_instances: 0 # Scale to zero okay if startup (including GCS download) is fast enough
-  max_instances: 5 # Adjust max instances based on budget/load
-  # Consider memory utilization targets if memory becomes the bottleneck
+  target_cpu_utilization: 0.75
+  min_instances: 0
+  max_instances: 3
   # target_memory_utilization: 0.75
 
 handlers:
-# Redirect HTTP traffic to HTTPS (Recommended)
 - url: /.*
   script: auto
   secure: always
-
-# Note: Removed Cloud SQL beta_settings and vpc_access_connector
 </code>
 
 backend\config.py:
@@ -252,16 +491,17 @@ backend\config.py:
 # config.py
 import os
 
-def setup_credentials():
-    """
-    Set the GOOGLE_APPLICATION_CREDENTIALS environment variable
-    to the JSON key stored in the project directory.
-    """
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "C:/Users/kdelv/Documents/autoquery-454320-9938d7b967a6.json"
-    os.environ["TABLES_DIR"] = "C:/Users/kdelv/Documents/tables_V2.0"
-if __name__ == "__main__":
-    setup_credentials()
+# No hardcoded paths needed here anymore.
+# App Engine uses Application Default Credentials (ADC) automatically
+# for Google Cloud client libraries (like Vertex AI and Cloud Storage).
+# GCS Bucket/Folder configuration is now handled via environment variables
+# set in app.yaml and read directly in app.py/database.py.
 
+# You can keep this file empty or remove it if nothing else needs configuration here.
+# If keeping it, ensure setup_credentials() is NOT called from app.py or main.py.
+
+# Let's leave it empty for now. You could add other non-sensitive config later.
+pass
 </code>
 
 backend\database.py:
@@ -270,37 +510,130 @@ backend\database.py:
 import os
 import pandas as pd
 import pandasql as ps
+from google.cloud import storage # Added
+import io # Added
 
 class Database:
-    def __init__(self, tables_dir):
-        self.tables_dir = tables_dir
+    def __init__(self, bucket_name, folder_path):
+        """
+        Initializes the Database by loading CSV tables from Google Cloud Storage.
+
+        Args:
+            bucket_name (str): The name of the GCS bucket containing the CSV files.
+            folder_path (str): The folder path within the bucket where CSVs are located (e.g., 'tables_V2.0'). Can be empty if files are in root.
+        """
+        if not bucket_name:
+            raise ValueError("GCS Bucket name is required.")
+
+        self.bucket_name = bucket_name
+        self.folder_path = folder_path.strip('/') # Ensure no leading/trailing slashes for consistency
+        self.storage_client = storage.Client()
+        self.tables = {} # Dictionary to hold loaded tables
         self.load_tables()
-    
-    def load_tables(self):
-        print("Loading CSV tables from:", self.tables_dir)
-        self.ad_table = pd.read_csv(os.path.join(self.tables_dir, 'Ad_table.csv'), low_memory=False)
-        self.price_table = pd.read_csv(os.path.join(self.tables_dir, 'Price_table.csv'), low_memory=False)
-        self.sales_table = pd.read_csv(os.path.join(self.tables_dir, 'Sales_table.csv'), low_memory=False)
-        self.basic_table = pd.read_csv(os.path.join(self.tables_dir, 'Basic_table.csv'), low_memory=False)
-        self.trim_table = pd.read_csv(os.path.join(self.tables_dir, 'Trim_table.csv'), low_memory=False)
-        self.img_table = pd.read_csv(os.path.join(self.tables_dir, 'Image_table.csv'), low_memory=False)
-        print("Tables loaded successfully.")
-    
-    def run_query(self, query):
+
+    def _load_single_table(self, table_name_csv):
+        """Loads a single table from GCS."""
         try:
+            bucket = self.storage_client.bucket(self.bucket_name)
+            blob_path = f"{self.folder_path}/{table_name_csv}" if self.folder_path else table_name_csv
+            blob = bucket.blob(blob_path)
+
+            if not blob.exists():
+                 print(f"Warning: Blob '{blob_path}' not found in bucket '{self.bucket_name}'. Skipping table.")
+                 return None
+
+            print(f"Loading {table_name_csv} from gs://{self.bucket_name}/{blob_path}...")
+            # Download content as bytes
+            content_bytes = blob.download_as_bytes()
+            # Read bytes into pandas DataFrame
+            # Using io.BytesIO avoids saving to a temporary file
+            df = pd.read_csv(io.BytesIO(content_bytes), low_memory=False)
+            print(f"{table_name_csv} loaded successfully. Shape: {df.shape}")
+            return df
+        except Exception as e:
+            print(f"Error loading table {table_name_csv} from GCS: {e}")
+            # Depending on requirements, you might want to raise the error
+            # or allow the app to continue without this table.
+            # raise e # Uncomment to make loading failure critical
+            return None # Return None if loading fails
+
+    def load_tables(self):
+        """Loads all required tables from GCS."""
+        print(f"Loading CSV tables from GCS bucket: '{self.bucket_name}', Folder: '{self.folder_path}'")
+        table_files = [
+            'Ad_table.csv', 'Price_table.csv', 'Sales_table.csv',
+            'Basic_table.csv', 'Trim_table.csv', 'Image_table.csv'
+        ]
+        # Dynamically assign to self.xxx_table attributes
+        for csv_file in table_files:
+             # Derive attribute name, e.g., 'Ad_table.csv' -> 'ad_table'
+             attr_name = csv_file.lower().replace('.csv', '')
+             df = self._load_single_table(csv_file)
+             setattr(self, attr_name, df) # Set self.ad_table, self.price_table etc.
+
+        # Optional: Check if essential tables were loaded
+        if getattr(self, 'ad_table', None) is None:
+             print("Critical Error: ad_table failed to load.")
+             # Handle critical failure appropriately - maybe raise exception
+
+        print("Finished loading tables.")
+
+
+    def run_query(self, query):
+        """
+        Executes a SQL query using pandasql on the loaded DataFrames.
+        """
+        try:
+            # Prepare the environment for pandasql, ensuring only loaded tables are included
             env = {
-                'ad_table': self.ad_table,
-                'price_table': self.price_table,
-                'sales_table': self.sales_table,
-                'basic_table': self.basic_table,
-                'trim_table': self.trim_table,
-                'img_table': self.img_table,
+                'ad_table': getattr(self, 'ad_table', None),
+                'price_table': getattr(self, 'price_table', None),
+                'sales_table': getattr(self, 'sales_table', None),
+                'basic_table': getattr(self, 'basic_table', None),
+                'trim_table': getattr(self, 'trim_table', None),
+                'img_table': getattr(self, 'img_table', None),
                 'pd': pd
             }
-            result = ps.sqldf(query, env)
+            # Filter out any tables that failed to load (are None)
+            filtered_env = {k: v for k, v in env.items() if v is not None}
+
+            if not filtered_env:
+                 return "Error: No data tables were loaded successfully."
+
+            print(f"Executing SQL query: {query}") # Log the query
+            result = ps.sqldf(query, filtered_env)
+            print(f"Query returned {len(result)} rows.") # Log result size
             return result.to_csv(index=False)
         except Exception as e:
+            # Log the specific error
+            print(f"SQL Execution Error for query '{query}': {str(e)}")
             return f"SQL Execution Error: {str(e)}"
+</code>
+
+backend\history.py:
+<code>
+# history.py
+import json
+import os
+
+HISTORY_FILE = "chat_history.json"
+
+def load_history():
+    """
+    Load chat history from a JSON file.
+    Returns a list of history items.
+    """
+    if os.path.exists(HISTORY_FILE):
+        with open(HISTORY_FILE, "r") as f:
+            return json.load(f)
+    return []
+
+def save_history(history):
+    """
+    Save chat history (a list of dictionaries) to a JSON file.
+    """
+    with open(HISTORY_FILE, "w") as f:
+        json.dump(history, f, indent=2)
 
 </code>
 
@@ -308,59 +641,114 @@ backend\main.py:
 <code>
 # main.py
 import os
-from config import setup_credentials
+# from config import setup_credentials # Removed call
 from database import Database
 from agent_tools import set_database_instance
 from agents import create_sql_agent
 from langchain.schema import AIMessage, HumanMessage
 
+# --- FOR LOCAL TESTING ONLY ---
+# This script is primarily for running the chat interface locally in the terminal.
+# It does NOT use GCS by default unless you manually set environment variables.
+# The `app.py` file is the entry point for App Engine deployment using Gunicorn.
+
 def main():
-    setup_credentials()
-    
-    # Use the TABLES_DIR environment variable set in config.py.
-    tables_dir = os.environ.get("TABLES_DIR")
-    if not tables_dir:
-        raise Exception("TABLES_DIR environment variable not set.")
-    
-    db = Database(tables_dir)
-    set_database_instance(db)
-    
+    # setup_credentials() # Removed call
+
+    # --- Attempt to load local config if available for testing ---
+    # For local testing, you might temporarily set environment variables
+    # or modify this section to load from a local path again.
+    # Example using local path for testing:
+    tables_dir_local = "C:/Users/kdelv/Documents/tables_V2.0" # <<< Or your local path
+    print(f"--- Running Local Test Mode ---")
+    print(f"Attempting to load tables from LOCAL directory: {tables_dir_local}")
+    print("NOTE: Deployment uses GCS via environment variables in app.yaml.")
+
+    try:
+        # Temporarily simulate Database class structure for local files if needed
+        # OR adjust Database class temporarily for local testing path.
+        # This example assumes you might manually point Database to local path
+        # IF you modify Database class or pass a local path handler.
+        # For simplicity, we'll rely on the GCS path if env vars are set,
+        # otherwise it might fail if not running in GAE context.
+
+        # If you want robust local testing mirroring GAE:
+        # 1. Set TABLES_BUCKET/TABLES_FOLDER env vars locally.
+        # 2. Ensure your local machine is authenticated (`gcloud auth application-default login`).
+        # 3. Run this script. It should then use the GCS version of Database.
+
+        # Simplified local path loading for basic testing (requires modifying Database or using dummy data)
+        # This part is tricky because Database is now GCS-focused.
+        # Easiest local test: Set env vars and use ADC as described above.
+        # If you *must* use local files without ADC/GCS for testing:
+        # You would need to conditionally change the Database init or loading logic.
+
+        # Assuming env vars are set locally and ADC login is done for local GCS test:
+        gcs_bucket = os.environ.get("TABLES_BUCKET")
+        gcs_folder = os.environ.get("TABLES_FOLDER")
+        if not gcs_bucket:
+             print("WARNING: TABLES_BUCKET env var not set for local test. Database init might fail.")
+             # raise Exception("Set TABLES_BUCKET and TABLES_FOLDER env vars for local GCS test.")
+             # Or fallback to a dummy/local path version of Database if implemented
+             return # Exit if no bucket is defined for local test
+
+        db = Database(bucket_name=gcs_bucket, folder_path=gcs_folder)
+        set_database_instance(db)
+
+    except Exception as e:
+         print(f"Error setting up database for local test: {e}")
+         print("Ensure GCS environment variables are set and you are authenticated via 'gcloud auth application-default login'.")
+         return # Exit if setup fails
+
     # In-memory chat history (list of LangChain message objects).
     chat_history = []
-    
+
     agent_executor = create_sql_agent()
-    
-    print("Welcome to the AutoSQL Chat Interface!")
+
+    print("\nWelcome to the AutoSQL Chat Interface (Local Test Mode)!")
     print("Enter your natural language queries (type 'exit' to quit).")
-    
+
     while True:
         user_input = input("You: ").strip()
         if user_input.lower() == "exit":
             break
-        
+
+        if db is None:
+             print("Agent: Database is not initialized. Cannot process query.")
+             continue
+
         agent_input = {
             "input": user_input,
             "chat_history": chat_history,
-            "agent_scratchpad": []
+            # "agent_scratchpad": [] # Handled by AgentExecutor
         }
-        
-        result = agent_executor.invoke(agent_input)
-        agent_output = result.get("output", "No output returned.")
-        
-        print("Agent:", agent_output)
-        
-        # Update the in-memory chat history.
-        chat_history.append(HumanMessage(content=user_input))
-        chat_history.append(AIMessage(content=agent_output))
-    
+
+        try:
+            result = agent_executor.invoke(agent_input)
+            agent_output = result.get("output", "No output returned.")
+
+            print("Agent:", agent_output)
+
+            # Update the in-memory chat history.
+            chat_history.append(HumanMessage(content=user_input))
+            chat_history.append(AIMessage(content=agent_output))
+
+            # Optional: Limit history size locally too
+            max_history = 20
+            if len(chat_history) > max_history:
+                chat_history = chat_history[-max_history:]
+
+        except Exception as e:
+            print(f"Error during local agent invocation: {e}")
+
+
 if __name__ == "__main__":
     main()
-
 </code>
 
 backend\prompts.py:
 <code>
-# prompts.py
+# backend/prompts.py
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 def get_sql_generation_prompt():
@@ -369,65 +757,51 @@ def get_sql_generation_prompt():
     into a valid SQL query for the automotive database.
     """
     system_message = """
-        You are an AI assistant specialized in querying an automotive database.
-        Your goal is to answer user questions by generating AND executing SQL queries. Follow these guidelines:
+        You are an AI assistant specialized in querying an automotive database using pandasql (SQLite syntax).
+        Your goal is to answer user questions accurately by generating AND executing SQL queries against the available tables.
 
-        1. Table Schemas and Relationships:
+        **CRITICAL RULE:** You MUST generate only **ONE single valid SQL statement** per request to the `execute_sql` tool. Do NOT include multiple statements separated by semicolons or newlines in the `query` parameter for the tool. If a user asks a question that requires multiple independent queries (e.g., 'top seller for each year'), you MUST inform the user that you can only process one part at a time (e.g., 'I can find the top seller for a specific year. Please specify which year you're interested in.').
 
-        1. ad_table: Maker, Genmodel, Genmodel_ID, Adv_ID, Adv_year, Adv_month, Color, Reg_year, Bodytype, 
-        Runned_Miles, Engin_size, Gearbox, Fuel_type, Price, Engine_power, Annual_Tax, Wheelbase, Height, Width, Length, 
-        Average_mpg, Top_speed, Seat_num, Door_num.
-        2. price_table: Maker, Genmodel, Genmodel_ID, Year, Entry_price.
-        3. sales_table: Maker, Genmodel, Genmodel_ID, 2020, 2019, 2018, 2017, 2016, 2015, 2014, 2013, 2012, 2011, 2010, 2009, 2008, 2007, 2006, 2005, 2004, 2003, 2002, 2001.
-        4. basic_table: Automaker, Automaker_ID, Genmodel, Genmodel_ID.
-        5. trim_table: Genmodel_ID, Maker, Genmodel, Trim, Year, Price, Gas_emission, Fuel_type, Engine_size.
-        6. img_table: Genmodel_ID, Image_ID, Image_name, Predicted_viewpoint, Quality_check.
+        **1. Table Schemas and Relationships:**
 
+        * `ad_table`: Contains advertisement details. Columns: `Maker`, `Genmodel`, `Genmodel_ID`, `Adv_ID`, `Adv_year`, `Adv_month`, `Color`, `Reg_year`, `Bodytype`, `Runned_Miles`, `Engin_size`, `Gearbox`, `Fuel_type`, `Price`, `Engine_power`, `Annual_Tax`, `Wheelbase`, `Height`, `Width`, `Length`, `Average_mpg`, `Top_speed`, `Seat_num`, `Door_num`.
+        * `price_table`: Contains original pricing info. Columns: `Maker`, `Genmodel`, `Genmodel_ID`, `Year`, `Entry_price`.
+        * `sales_table`: Contains sales figures by year. Columns: `Maker`, `Genmodel`, `Genmodel_ID`, `"2020"`, `"2019"`, `"2018"`, `"2017"`, `"2016"`, `"2015"`, `"2014"`, `"2013"`, `"2012"`, `"2011"`, `"2010"`, `"2009"`, `"2008"`, `"2007"`, `"2006"`, `"2005"`, `"2004"`, `"2003"`, `"2002"`, `"2001"`. (Note: Year columns are strings and require double quotes in queries, e.g., `"2018"`).
+        * `basic_table`: Basic model and maker identifiers. Columns: `Automaker`, `Automaker_ID`, `Genmodel`, `Genmodel_ID`. **Warning:** This table uses `Automaker` for the manufacturer name, while most other tables use `Maker`. Use the correct column name based on the table you are querying.
+        * `trim_table`: Trim level details. Columns: `Genmodel_ID`, `Maker`, `Genmodel`, `Trim`, `Year`, `Price`, `Gas_emission`, `Fuel_type`, `Engine_size`.
+        * `img_table`: Image metadata. Columns: `Genmodel_ID`, `Image_ID`, `Image_name`, `Predicted_viewpoint`, `Quality_check`.
 
-        2. Common Join Keys:
-        - Primary join fields: Maker, Genmodel, Genmodel_ID
-        - Use these for table relationships:
-            * sales_table ↔ price_table: Maker, Genmodel, Genmodel_ID
-            * ad_table ↔ basic_table: Genmodel_ID
-            * trim_table ↔ basic_table: Genmodel_ID
-            * img_table ↔ other tables: Genmodel_ID
+        **2. Common Join Keys:**
+        * Primary join fields: `Genmodel_ID`. Also `Maker`/`Automaker` and `Genmodel` where available.
+        * Example relationships:
+            * `sales_table` ↔ `price_table` (Use `Genmodel_ID`)
+            * `ad_table` ↔ `basic_table` (Use `Genmodel_ID`)
+            * `trim_table` ↔ `basic_table` (Use `Genmodel_ID`)
+            * `img_table` ↔ other tables (Use `Genmodel_ID`)
+            * `ad_table` ↔ `sales_table` (Use `Genmodel_ID`)
 
-        3. Best Practices:
-        - Always quote year columns (e.g., \"2018\")
-        - Use appropriate JOIN types based on data requirements
-        - Use table aliases for readability
-        - Handle NULL values appropriately
-        - Include proper WHERE clauses for filtering
-        - Use ORDER BY for sorted results
+        **3. Query Best Practices:**
+        * **Single Statement ONLY:** Re-iterating the critical rule - generate only one SQL statement.
+        * **Quoted Year Columns:** Always quote year columns from `sales_table` (e.g., `"2015"`).
+        * **Case-Insensitive Filtering:** For string comparisons in `WHERE` clauses (e.g., on `Maker`, `Automaker`, `Genmodel`, `Color`, `Bodytype`), use the `UPPER()` or `LOWER()` function on both the column and the literal value to ensure case-insensitivity. Example: `WHERE UPPER(Maker) = UPPER('Ford')`.
+        * **Table Aliases:** Use table aliases for readability in JOINs (e.g., `FROM ad_table AS ad JOIN basic_table AS b ON ad.Genmodel_ID = b.Genmodel_ID`).
+        * **Valid Columns:** Ensure you are selecting and filtering on columns that actually exist in the specified table(s). Pay attention to `Maker` vs. `Automaker`.
+        * **NULL Handling:** Be mindful of potential NULL values when filtering or aggregating.
+        * **Data Types:** Use `CAST()` when necessary, e.g., `CAST("2020" AS INTEGER)` if you need to treat sales figures numerically.
 
-        Example complex query:
-        SELECT 
-            s.Maker,
-            s.Genmodel,
-            s.\"2018\" as sales_2018,
-            p.Entry_price,
-            t.Trim,
-            t.Gas_emission,
-            ad.Bodytype,
-            ad.Engine_power
-        FROM sales_table s
-        JOIN price_table p ON s.Genmodel_ID = p.Genmodel_ID
-        LEFT JOIN trim_table t ON s.Genmodel_ID = t.Genmodel_ID AND t.Year = 2018
-        LEFT JOIN ad_table ad ON s.Genmodel_ID = ad.Genmodel_ID
-        WHERE s.\"2018\" > 0
-        ORDER BY s.\"2018\" DESC;
-        
-         **Execution Workflow:**
-        1. Analyze the user's question.
-        2. Generate the appropriate SQL query based on the schema and best practices.
-        3. **IMPORTANT:** You MUST then use the `execute_sql` tool to run this generated query against the database.
-        4. Analyze the results returned by the `execute_sql` tool.
-        5. Formulate a final, user-friendly answer based *only* on the data returned by the tool. Do not just return the raw CSV or SQL. Summarize the findings or present the data clearly. If the tool returns an error, report the error.
+        **4. Handling Potential Data Issues:**
+        * **Model Name Variations:** User input for model names (`Genmodel`) might differ slightly from the stored format (e.g., 'F-150' vs 'F150'). If a query for a specific model on `ad_table` or `sales_table` returns no results, consider verifying the canonical model name in `basic_table` first using a query like `SELECT DISTINCT Genmodel FROM basic_table WHERE UPPER(Automaker) = UPPER('...')`. You may need to inform the user about the discrepancy or ask for clarification if multiple similar models exist. Do *not* run this verification query unless the primary query fails with zero results for a specific model filter.
 
-        **Your final output should be the natural language answer derived from the executed query results, NOT the SQL query itself.**
-    
+        **5. Execution Workflow:**
+        1.  Analyze the user's question carefully.
+        2.  Identify the necessary table(s) and column(s). Pay attention to `Maker` vs `Automaker`.
+        3.  Generate **ONE single, valid SQL query** following the best practices (case-insensitivity, quoted years, correct columns, etc.).
+        4.  **IMPORTANT:** Use the `execute_sql` tool, passing the generated single SQL query string to it.
+        5.  Analyze the results returned by the `execute_sql` tool (which will be in CSV format or an error message).
+        6.  Formulate a final, natural language, user-friendly answer based *only* on the data returned by the tool. Do not just return the raw CSV or SQL. Summarize findings or present data clearly. If the tool returns an error (e.g., "SQL Execution Error..."), report that error clearly to the user and explain the likely cause if possible (e.g., "I couldn't run the query because..."). If the tool returns an empty result (just headers), state that no data matching the criteria was found.
+
+        **Your final output MUST be the natural language answer derived from the executed query results or a clear explanation of why the query failed/returned no data. Do NOT output the SQL query itself unless specifically asked.**
         """
-
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_message),
@@ -436,38 +810,44 @@ def get_sql_generation_prompt():
         MessagesPlaceholder(variable_name="agent_scratchpad")
     ])
     return prompt
-
 </code>
 
 frontend\app.yaml:
 <code>
-# frontend/app.yaml (for Vanilla JS version)
-runtime: static
-service: frontend # Or keep as 'default' if it's your main service
+# frontend/app.yaml
+
+# Specify a valid runtime, even though we only serve static files.
+# This satisfies the App Engine requirement.
+runtime: python312 # Or choose another valid runtime like nodejs20, etc.
+
+service: default # Deploy as the default service
 
 handlers:
   # Serve the CSS file
   - url: /style\.css
-    static_files: style.css
-    upload: style\.css
+    static_files: style.css # Path relative to this app.yaml file
+    upload: style\.css      # Regex matching the file to upload
 
   # Serve the JavaScript file
   - url: /script\.js
     static_files: script.js
     upload: script\.js
 
-  # Serve favicon if you added one to /public (adjust path if not in /public)
-  # - url: /favicon\.png
-  #   static_files: public/favicon.png
-  #   upload: public/favicon\.png
-
-  # Serve the main index.html for the root path and any other paths
+  # Serve the main index.html for the root path and any other unmatched paths
   - url: /.*
     static_files: index.html
     upload: index\.html
 
-# Optional: Redirect all traffic to HTTPS
+# Optional: Redirect all traffic to HTTPS (Good practice)
 # secure: always
+
+# Optional: Set expiration for static assets
+# default_expiration: "1d"
+
+# Optional: Specify scaling if needed, otherwise defaults apply
+# automatic_scaling:
+#  min_instances: 0
+#  max_instances: 1 # Often 1 is sufficient for purely static frontend
 </code>
 
 frontend\index.html:
@@ -484,7 +864,7 @@ frontend\index.html:
     <div class="container">
         <header>
             <h1>AutoQuery AI</h1>
-            <h2>Vehicle Data Query Assistant</h2>
+            <h2>Vehicle Data Query Assistant built by Kai Delventhal</h2>
         </header>
 
         <div class="chat-window">
@@ -527,12 +907,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const errorDisplay = document.getElementById('error-display');
 
     // --- Configuration ---
-    // Define API URL (could be read from meta tag or config object if needed later)
-    const API_URL = 'http://localhost:5000/api/chat'; // Use relative path if served by same App Engine app potentially,
-                               // or set full URL if backend is separate service:
-                               // const API_URL = 'YOUR_BACKEND_DEPLOYED_URL/api/chat';
+    // IMPORTANT: After deploying the backend service, update this URL!
+    // Get the backend service URL from `gcloud app deploy backend/app.yaml` output
+    // (e.g., https://backend-dot-your-project-id.appspot.com)
+    // and append '/api/chat' to it.
+    const API_URL = 'https://backend-dot-autoquery-454320.uc.r.appspot.com/api/chat'; // <<< UPDATE THIS AFTER BACKEND DEPLOYMENT
+    // Example Deployed URL: const API_URL = 'https://backend-dot-your-project-id.appspot.com/api/chat';
 
-    // In-memory chat history
+    // In-memory chat history (client-side only for display)
+    // Note: The actual history context for the LLM is managed server-side in app.py
     let chatHistory = [
         { sender: 'agent', message: 'Welcome to AutoQuery AI! How can I help you find vehicle data today?' }
     ];
@@ -547,28 +930,29 @@ document.addEventListener('DOMContentLoaded', () => {
             listItem.classList.add('message');
             listItem.classList.add(msg.sender === 'user' ? 'user-message' : 'agent-message');
 
-            // Use textContent to prevent potential XSS from agent response if it contained HTML
-            // If markdown is NEEDED, a library like 'marked' or 'showdown' could be added,
-            // but for simplicity, we'll render as text.
+            // Sanitize output - Use textContent to prevent XSS
             listItem.textContent = msg.message;
 
             messageList.appendChild(listItem);
         });
         // Scroll to the bottom
-        messageList.scrollTop = messageList.scrollHeight;
+        // Use setTimeout to allow the DOM to update before scrolling
+        setTimeout(() => {
+             messageList.scrollTop = messageList.scrollHeight;
+        }, 0);
     }
 
     /** Displays error messages */
     function displayError(errorMessage) {
         errorDisplay.textContent = `Error: ${errorMessage}`;
         errorDisplay.style.display = 'block';
-         loadingIndicator.style.display = 'none'; // Hide loading if error occurs
+        loadingIndicator.style.display = 'none'; // Hide loading if error occurs
     }
 
     /** Hides the error display */
     function clearError() {
-         errorDisplay.textContent = '';
-         errorDisplay.style.display = 'none';
+        errorDisplay.textContent = '';
+        errorDisplay.style.display = 'none';
     }
 
     /** Sends message to backend API */
@@ -577,12 +961,16 @@ document.addEventListener('DOMContentLoaded', () => {
         clearError();
         setInteractionState(true); // Disable input
 
-        // Prepare history for API (simple array of objects)
-        const historyForApi = chatHistory.map(h => ({
-            sender: h.sender,
-            message: h.message
-        }));
+        // Add user message to display history immediately
+        chatHistory.push({ sender: 'user', message: userMessage });
+        renderMessages();
+        messageInput.value = ''; // Clear input field
 
+
+        // Note: We are NOT sending the client-side history here.
+        // The backend maintains its own history per instance.
+        // If you needed persistent history across requests, the backend
+        // would need to load/save it, and the API call might include a session ID.
         try {
             const response = await fetch(API_URL, {
                 method: 'POST',
@@ -591,17 +979,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 },
                 body: JSON.stringify({
                     message: userMessage,
-                    history: historyForApi, // Send current history
+                    // Not sending history from client: history: historyForApi,
                 }),
             });
 
             if (!response.ok) {
-                 let errorMsg = `Request failed (${response.status})`;
-                 try {
-                     const errorData = await response.json();
-                     errorMsg = errorData.error || errorMsg;
-                 } catch (e) { /* Ignore if no JSON body */ }
-                 throw new Error(errorMsg);
+                let errorMsg = `Request failed (${response.status})`;
+                try {
+                    // Try to get more specific error from backend response
+                    const errorData = await response.json();
+                    errorMsg = errorData.error || errorMsg;
+                } catch (e) { /* Ignore if no JSON body or parsing error */ }
+                throw new Error(errorMsg);
             }
 
             const data = await response.json();
@@ -613,17 +1002,22 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (error) {
             console.error('API Error:', error);
             displayError(error.message || 'Could not connect to the agent.');
-            // Optional: remove the user's message if API call failed?
+            // Optional: Remove the user's message from display if API call failed?
+            // chatHistory.pop(); // Removes the last added message (the user's)
+            // renderMessages();
         } finally {
-             loadingIndicator.style.display = 'none';
-             setInteractionState(false); // Re-enable input
+            loadingIndicator.style.display = 'none';
+            setInteractionState(false); // Re-enable input
         }
     }
 
     /** Enables/Disables input field and send button */
     function setInteractionState(disabled) {
-         messageInput.disabled = disabled;
-         sendButton.disabled = disabled;
+        messageInput.disabled = disabled;
+        sendButton.disabled = disabled;
+        // Optionally change styles for disabled state
+        messageInput.style.cursor = disabled ? 'not-allowed' : '';
+        sendButton.style.cursor = disabled ? 'not-allowed' : 'pointer';
     }
 
 
@@ -633,13 +1027,8 @@ document.addEventListener('DOMContentLoaded', () => {
         event.preventDefault(); // Prevent page reload
         const userMessage = messageInput.value.trim();
 
-        if (userMessage) {
-            // Add user message to history and render
-            chatHistory.push({ sender: 'user', message: userMessage });
-            renderMessages();
-            messageInput.value = ''; // Clear input field
-
-            // Send message to backend
+        if (userMessage && !sendButton.disabled) { // Check if input is not disabled
+            // Send message to backend (which also handles rendering user message)
             sendMessageToApi(userMessage);
         }
     });

@@ -1,27 +1,34 @@
-# frontend/app.yaml (for Vanilla JS version)
-runtime: static
-service: frontend # Or keep as 'default' if it's your main service
+# frontend/app.yaml
+
+# Specify a valid runtime, even though we only serve static files.
+# This satisfies the App Engine requirement.
+runtime: python312 # Or choose another valid runtime like nodejs20, etc.
+
+service: default # Deploy as the default service
 
 handlers:
   # Serve the CSS file
   - url: /style\.css
-    static_files: style.css
-    upload: style\.css
+    static_files: style.css # Path relative to this app.yaml file
+    upload: style\.css      # Regex matching the file to upload
 
   # Serve the JavaScript file
   - url: /script\.js
     static_files: script.js
     upload: script\.js
 
-  # Serve favicon if you added one to /public (adjust path if not in /public)
-  # - url: /favicon\.png
-  #   static_files: public/favicon.png
-  #   upload: public/favicon\.png
-
-  # Serve the main index.html for the root path and any other paths
+  # Serve the main index.html for the root path and any other unmatched paths
   - url: /.*
     static_files: index.html
     upload: index\.html
 
-# Optional: Redirect all traffic to HTTPS
+# Optional: Redirect all traffic to HTTPS (Good practice)
 # secure: always
+
+# Optional: Set expiration for static assets
+# default_expiration: "1d"
+
+# Optional: Specify scaling if needed, otherwise defaults apply
+# automatic_scaling:
+#  min_instances: 0
+#  max_instances: 1 # Often 1 is sufficient for purely static frontend

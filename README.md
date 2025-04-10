@@ -1,86 +1,154 @@
 # AutoQuery AI
 
+**Live Demo:** [Access the AutoQuery AI Assistant](https://autoquery-454320.uc.r.appspot.com/)
+
 ## Project Description
 
-AutoQuery AI is an intelligent vehicle recommendation and query assistant designed to help users find the perfect vehicle based on their preferences. Leveraging advanced natural language processing and large language models, AutoQuery AI allows users to interact with a chat-based interface to query a comprehensive vehicle sales dataset. The project utilizes Google Vertex AI, LangChain, and LangGraph to provide optimized and accurate query results.
+AutoQuery AI is an intelligent vehicle recommendation and query assistant deployed on Google Cloud. It helps users find vehicle information by asking questions in natural language. Leveraging Google Vertex AI's language models and LangChain for orchestration, AutoQuery AI translates user requests into SQL queries executed against a vehicle dataset stored in Google Cloud Storage.
 
-## Features
+## How It Works
 
-- **Natural Language Interface**: Users can ask questions in plain English to find vehicles that match their criteria.
-- **Agentic AI Query Processing**: Converts natural language queries into optimized SQL queries using LLMs.
-- **Data-Driven Recommendations**: Provides personalized vehicle recommendations based on user queries and historical data.
+1.  **Frontend Interaction:** Users interact with a simple web interface (HTML/CSS/JavaScript) served by Google App Engine.
+2.  **API Request:** User messages are sent to a backend API built with Flask and deployed as a separate App Engine service.
+3.  **Agent Processing:** The Flask backend uses a LangChain `AgentExecutor`. This agent is powered by a Google Vertex AI LLM (currently configured with Gemini Flash Lite).
+4.  **Prompting & Schema:** The agent receives the user query along with a detailed system prompt containing:
+    * Instructions on how to behave.
+    * The exact database schema (table names, column names, data types).
+    * Rules for generating SQL (case-insensitivity, handling specific column names like `Maker` vs `Automaker`, single-statement execution).
+    * Guidance on validating user input against known data (e.g., checking model names).
+5.  **SQL Generation:** Based on the user query and its prompt, the LLM generates a single `pandasql` (SQLite syntax) query.
+6.  **Tool Execution:** The agent invokes a custom LangChain tool (`execute_sql`).
+7.  **Data Querying:**
+    * The `execute_sql` tool uses the `pandasql` library.
+    * `pandasql` runs the generated SQL query against Pandas DataFrames.
+    * These DataFrames are loaded into memory by the backend application *on startup* from CSV files stored in a Google Cloud Storage (GCS) bucket.
+8.  **Result Formatting:** The tool returns the query results as a CSV-formatted string (or an error message) back to the agent.
+9.  **Response Generation:** The agent analyzes the tool's output (the CSV data or error) and formulates a final, user-friendly natural language response.
+10. **API Response:** The Flask backend sends the agent's response back to the frontend, which displays it to the user.
+
+## Example Prompts to Try
+
+Here are a few example questions you can ask to test the agent's capabilities:
+
+* **Simple Lookup & Sorting:**
+    * `What was the top selling car in 2015?`
+    * `What car had the largest engine size?`
+    * `Which car has the highest top speed?`
+* **Filtering:**
+    * `Show me red Ford Fiesta cars registered after 2018` (Tests case-insensitivity)
+    * `List BMW cars registered in 2020 with less than 10000 miles`
+    * `Find cars with an automatic gearbox and more than 200 engine power`
+* **Joins / Combining Info (Implicit):**
+    * `What was the entry price for a Ford Focus in 2019?` (Uses `price_table`)
+    * `Show sales data for the Ford F150 in 2016` (Tests model name handling "F150")
+* **Testing Limitations:**
+    * `List the top selling cars for 2018 and 2019` (Agent should state it can only do one year at a time)
+    * `What data do you have for the 'CyberTruck' model?` (Agent should report no data found if it's not in the tables)
+
+Feel free to experiment with different combinations of makes, models, years, colors, features, etc.!
 
 ## Tech Stack
 
-- **Google Vertex AI**: For hosting and managing LLM models.
-- **LangChain & LangGraph**: For orchestrating prompt chains and optimizing queries.
-- **Python**: For data processing and backend development.
-- **PandasSQL**: For querying the dataset efficiently.
-- **Flask/Streamlit**: For building the chat interface.
+* **Cloud Platform:** Google Cloud
+    * **Compute:** App Engine Standard (Python 3.12 Runtime)
+    * **Storage:** Cloud Storage (for CSV data)
+    * **AI:** Vertex AI (Gemini Flash Lite Model)
+* **Backend:**
+    * **Language:** Python
+    * **Framework:** Flask
+    * **Web Server:** Gunicorn (with `gthread` workers)
+    * **API Communication:** Flask-CORS
+* **AI Orchestration:** LangChain (AgentExecutor, Tools, Prompts)
+* **Data Querying:** Pandas, Pandasql
+* **Frontend:** HTML, CSS, Vanilla JavaScript
 
-## Getting Started
+## Key Features
+
+* **Natural Language Interface**: Ask questions in plain English to query vehicle data.
+* **Agentic SQL Generation**: Converts natural language to `pandasql` queries using an LLM agent.
+* **Cloud-Native Deployment**: Runs efficiently on Google App Engine, utilizing Cloud Storage for data.
+* **Error Handling**: Agent attempts to identify and report SQL execution errors.
+
+## Getting Started (for Contributors)
+
+While the primary way to use the app is via the live demo link above, contributors wishing to run or modify the code locally can follow these steps:
 
 ### Prerequisites
 
-- Python 3.8+
-- Pandas
-- PandasSQL
-- Flask/Streamlit
+* Python 3.10+
+* Google Cloud SDK (`gcloud`) installed and authenticated (`gcloud auth login`, `gcloud auth application-default login`)
+* A Google Cloud Project with Billing enabled.
+* APIs Enabled: App Engine Admin, Vertex AI, Cloud Storage, Cloud Build.
+* A GCS Bucket containing the required CSV data files (`Ad_table.csv`, `Price_table.csv`, etc.) in a specific folder structure (e.g., `tables_V2.0/`).
 
 ### Installation
 
-1. Clone the repository:
+1.  Clone the repository:
     ```bash
-    git clone https://github.com/yourusername/autoquery-ai.git
+    git clone [https://github.com/yourusername/autoquery-ai.git](https://github.com/yourusername/autoquery-ai.git) # Replace with your repo URL
     cd autoquery-ai
     ```
-
-2. Install the required packages:
+2.  Set up a Python virtual environment (recommended):
     ```bash
-    pip install pandas pandasql flask streamlit
+    python -m venv venv
+    source venv/bin/activate # Linux/macOS
+    # venv\Scripts\activate # Windows
     ```
-
-### Usage
-
-1. Load the datasets:
-    ```python
-    import os
-    import pandas as pd
-    import pandasql as ps
-
-    # Define your table directory
-    TABLE_DIR = 'path/to/your/csv/files'
-
-    # Load the CSV tables into pandas DataFrames
-    ad_table = pd.read_csv(os.path.join(TABLE_DIR, 'Ad_table.csv'))
-    price_table = pd.read_csv(os.path.join(TABLE_DIR, 'Price_table.csv'))
-    sales_table = pd.read_csv(os.path.join(TABLE_DIR, 'Sales_table.csv'))
-    basic_table = pd.read_csv(os.path.join(TABLE_DIR, 'Basic_table.csv'))
-    trim_table = pd.read_csv(os.path.join(TABLE_DIR, 'Trim_table.csv'))
-    img_table = pd.read_csv(os.path.join(TABLE_DIR, 'Image_table.csv'))
+3.  Install required packages:
+    ```bash
+    pip install -r backend/requirements.txt
     ```
-
-2. Run a sample query using PandasSQL:
-    ```python
-    query = """
-    SELECT ad_table.Maker, ad_table.Genmodel, ad_table.Reg_year, ad_table.Bodytype, ad_table.Color, ad_table.Price, price_table.Entry_price, sales_table.2018
-    FROM ad_table
-    JOIN price_table ON ad_table.Genmodel_ID = price_table.Genmodel_ID
-    JOIN sales_table ON ad_table.Genmodel_ID = sales_table.Genmodel_ID
-    WHERE ad_table.Reg_year >= 2018 AND ad_table.Bodytype = 'Sedan' AND ad_table.Color = 'Red'
-    """
-    result_df = ps.sqldf(query, locals())
-    print(result_df)
+4.  **Configure Environment Variables (Crucial for Local Backend):**
+    Set the following environment variables in your local terminal session *before* running the backend:
+    ```bash
+    export GOOGLE_CLOUD_PROJECT="your-gcp-project-id"
+    export TABLES_BUCKET="your-gcs-bucket-name"
+    export TABLES_FOLDER="your-folder-in-bucket" # e.g., tables_V2.0 or "" if root
+    # Use 'set' instead of 'export' on Windows Command Prompt
+    # Use '$env:VAR_NAME = "value"' in PowerShell
     ```
+    *(Ensure your local machine is authenticated via `gcloud auth application-default login` for the backend to access GCS and Vertex AI).*
 
-3. Develop the chat interface and integrate with LangChain for natural language to SQL conversion.
+### Local Usage
+
+1.  **Run Backend:**
+    ```bash
+    # Navigate to the backend directory
+    cd backend
+    # Run using Flask's development server (for testing, less robust than gunicorn)
+    flask run --host=0.0.0.0 --port=5000
+    # OR run with gunicorn locally (mimics App Engine better)
+    # gunicorn -b 0.0.0.0:5000 -w 1 -k gthread app:app --log-level debug
+    ```
+2.  **Run Frontend:**
+    * Open `frontend/index.html` directly in your browser (will likely fail due to CORS if backend isn't on `localhost:5000`).
+    * OR use a simple local web server (like Python's `http.server` or VS Code Live Server) from the `frontend` directory. You may need to adjust the `API_URL` in `script.js` temporarily to `http://localhost:5000/api/chat` for local testing. Remember to change it back before deploying the frontend.
+
+## Deployment
+
+The application is designed for Google App Engine Standard Environment using two services:
+
+1.  **`backend` Service:** Runs the Python/Flask application defined in `backend/app.yaml`. Deployed via `gcloud app deploy backend/app.yaml`.
+2.  **`default` Service (or `frontend`):** Serves the static frontend files (HTML/CSS/JS) defined in `frontend/app.yaml`. Deployed via `gcloud app deploy frontend/app.yaml`.
+
+*(Ensure `app.yaml` files have correct project IDs, environment variables, and instance classes before deploying.)*
 
 ## Future Enhancements
 
-- Integrate vehicle images for enriched recommendations.
-- Provide trend analytics and pricing predictions.
-- Expand the assistant to handle more complex queries and provide deeper insights.
+* **React Frontend:** Migrate the frontend from Vanilla JS to React for a more modern, component-based UI, better state management, and easier development of complex features.
+* **Improved Agentic Ability:**
+    * **Multi-Step Reasoning:** Implement frameworks like LangGraph to allow the agent to perform multiple sequential `execute_sql` calls for complex requests (e.g., comparing data across years, complex validation steps).
+    * **Error Recovery:** Enhance the agent's ability to automatically correct and retry failed SQL queries based on error messages.
+    * **Data Visualization:** Add capabilities for the agent to generate simple charts or summaries based on query results.
+    * **Image Integration:** Utilize the `img_table` to display relevant vehicle images alongside query results.
+* **Enhanced Security:**
+    * **Authentication:** Add user login/authentication (e.g., using Google Identity Platform or Firebase Auth) if multi-user support or data protection is needed.
+    * **Input Sanitization:** Implement stricter validation and sanitization on user inputs and potentially LLM outputs.
+    * **Secrets Management:** Use Google Secret Manager for any API keys or sensitive configuration if needed (currently relies on ADC).
+    * **Stricter CORS:** Configure `Flask-CORS` to only allow requests specifically from the deployed frontend origin instead of `*`.
+    * **Rate Limiting:** Implement API rate limiting (e.g., using `Flask-Limiter`) to prevent abuse.
+* **Data Backend Migration:** For improved performance, scalability, and reduced memory usage (allowing smaller App Engine instances), migrate the data from GCS CSV files + Pandas DataFrames to a dedicated database like Google Cloud SQL (PostgreSQL/MySQL) or potentially BigQuery. This would require replacing `pandasql` with standard SQL querying libraries (like SQLAlchemy or database-specific connectors).
 
 ## Conclusion
 
-AutoQuery AI showcases advanced AI techniques and data science skills, making it a valuable addition to your portfolio. It demonstrates your ability to build intelligent, data-driven applications that solve real-world problems.
+AutoQuery AI demonstrates the power of combining LLMs (Vertex AI), orchestration frameworks (LangChain), cloud services (GCP App Engine, GCS), and data manipulation libraries (Pandas, Pandasql) to create interactive, data-driven applications. It showcases skills in backend development, API design, cloud deployment, and AI integration.

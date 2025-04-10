@@ -1,32 +1,23 @@
-runtime: python312 # Or python311, python310 depending on dependencies
-entrypoint: gunicorn -b :$PORT -w 2 -k uvicorn.workers.UvicornWorker app:app --timeout 120 # Adjust workers/timeout
+runtime: python312
+service: backend
+# --- UPDATED ENTRYPOINT ---
+entrypoint: gunicorn -b :$PORT -w 2 --threads 4 -k gthread app:app --timeout 120 --log-level info # Changed worker to gthread
 
-instance_class: F4_1G # Or B4_1G etc. START WITH F1/B1 but increase if CSVs require more memory (e.g., F2, F4, B2, B4) - Monitor memory usage!
+instance_class: F4_1G # Keep F4 for memory
 
 env_variables:
-  # GCP Settings
-  GOOGLE_CLOUD_PROJECT: "autoquery-454320" # Replace with your Project ID
-  GCP_REGION: "us-central1" # e.g., us-central1 - Replace
+  GOOGLE_CLOUD_PROJECT: "autoquery-454320"
+  TABLES_BUCKET: "autoquery-csv-data"
+  TABLES_FOLDER: "tables_V2.0"
+  # GCP_REGION: "us-central1" # Optional
 
-  # GCS Settings for CSV Data
-  TABLES_BUCKET: " autoquery-csv-data" # Replace - Bucket containing CSVs
-  TABLES_FOLDER: "tables_V2.0" # Replace - Folder within the bucket containing CSVs
-
-  # Optional: Secret Manager for API Key (if needed and not using ADC alone)
-  #API_KEY_SECRET_NAME: "VERTEX_AI_API_KEY" # Replace - Name of the secret
-
-# Automatic scaling settings (adjust based on expected load & memory usage)
 automatic_scaling:
-  target_cpu_utilization: 0.7
-  min_instances: 0 # Scale to zero okay if startup (including GCS download) is fast enough
-  max_instances: 5 # Adjust max instances based on budget/load
-  # Consider memory utilization targets if memory becomes the bottleneck
+  target_cpu_utilization: 0.75
+  min_instances: 0
+  max_instances: 3
   # target_memory_utilization: 0.75
 
 handlers:
-# Redirect HTTP traffic to HTTPS (Recommended)
 - url: /.*
   script: auto
   secure: always
-
-# Note: Removed Cloud SQL beta_settings and vpc_access_connector

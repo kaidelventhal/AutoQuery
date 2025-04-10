@@ -2,100 +2,101 @@
 import os
 import pandas as pd
 import pandasql as ps
-from google.cloud import storage
-import io
-import config # Import config to get bucket/folder names
+from google.cloud import storage # Added
+import io # Added
 
 class Database:
-    def __init__(self):
+    def __init__(self, bucket_name, folder_path):
         """
-        Initializes the database by downloading CSVs from GCS
-        and loading them into pandas DataFrames.
+        Initializes the Database by loading CSV tables from Google Cloud Storage.
+
+        Args:
+            bucket_name (str): The name of the GCS bucket containing the CSV files.
+            folder_path (str): The folder path within the bucket where CSVs are located (e.g., 'tables_V2.0'). Can be empty if files are in root.
         """
-        self.gcs_client = storage.Client(project=config.GCP_PROJECT)
-        self.tables_dir = "/tmp/tables"  # Use App Engine's temporary writable directory
-        self.dataframes = {} # Dictionary to hold DataFrames
+        if not bucket_name:
+            raise ValueError("GCS Bucket name is required.")
 
-        if not config.TABLES_BUCKET or not config.TABLES_FOLDER:
-            raise ValueError("TABLES_BUCKET and TABLES_FOLDER environment variables must be set.")
+        self.bucket_name = bucket_name
+        self.folder_path = folder_path.strip('/') # Ensure no leading/trailing slashes for consistency
+        self.storage_client = storage.Client()
+        self.tables = {} # Dictionary to hold loaded tables
+        self.load_tables()
 
-        print(f"Attempting to load tables from GCS Bucket: {config.TABLES_BUCKET}, Folder: {config.TABLES_FOLDER}")
-        self.download_and_load_tables(config.TABLES_BUCKET, config.TABLES_FOLDER)
-
-
-    def download_and_load_tables(self, bucket_name, folder_name):
-        """Downloads CSV files from GCS and loads them into pandas DataFrames."""
-        os.makedirs(self.tables_dir, exist_ok=True)
-        bucket = self.gcs_client.bucket(bucket_name)
-        blobs = self.gcs_client.list_blobs(bucket, prefix=f"{folder_name}/", delimiter='/')
-
-        loaded_files = []
-        required_tables = ['Ad_table.csv', 'Price_table.csv', 'Sales_table.csv', 'Basic_table.csv', 'Trim_table.csv', 'Image_table.csv'] # Add more if needed
-
-        for blob in blobs:
-            if blob.name.endswith(".csv"):
-                file_name = os.path.basename(blob.name)
-                destination_path = os.path.join(self.tables_dir, file_name)
-                try:
-                    print(f"Downloading {blob.name} to {destination_path}...")
-                    blob.download_to_filename(destination_path)
-                    print(f"Loading {file_name} into DataFrame...")
-                    # Derive table name for pandasql (e.g., 'Ad_table.csv' -> 'ad_table')
-                    table_key = file_name.replace('.csv', '').lower()
-                    # Load into DataFrame and store in dictionary
-                    self.dataframes[table_key] = pd.read_csv(destination_path, low_memory=False)
-                    print(f"Loaded {file_name} as '{table_key}'. Shape: {self.dataframes[table_key].shape}")
-                    loaded_files.append(file_name)
-                except Exception as e:
-                    print(f"Error processing {blob.name}: {e}")
-                    # Decide if failure to load one table is critical
-                    # raise e # Uncomment to make failures critical
-
-        # Verify all required tables were loaded
-        missing_tables = [req for req in required_tables if req.replace('.csv', '').lower() not in self.dataframes]
-        if missing_tables:
-             print(f"WARNING: Missing required table data for: {missing_tables}")
-             # raise ValueError(f"Missing required table data for: {missing_tables}") # Uncomment if loading all is mandatory
-
-        print("Finished loading tables from GCS.")
-
-
-    def run_query(self, query: str) -> str:
-        """
-        Executes one or more SQL queries on the loaded pandas DataFrames using pandasql.
-        Returns results as a combined CSV string.
-        """
-        print(f"Executing pandasql query:\n{query}")
-        # Copy DataFrames into the local environment and add pandas
-        local_env = self.dataframes.copy()
-        local_env['pd'] = pd
-
+    def _load_single_table(self, table_name_csv):
+        """Loads a single table from GCS."""
         try:
-            # Split the query by semicolon and filter out empty statements.
-            queries = [q.strip() for q in query.strip().split(';') if q.strip()]
-            csv_results = []
-            for q in queries:
-                result_df = ps.sqldf(q, local_env)
-                output = io.StringIO()
-                result_df.to_csv(output, index=False)
-                csv_results.append(output.getvalue())
-            # Combine all CSV outputs (separated by a blank line)
-            combined_csv = "\n\n".join(csv_results)
-            print(f"Pandasql query successful, returning results from {len(queries)} query(ies).")
-            return combined_csv
+            bucket = self.storage_client.bucket(self.bucket_name)
+            blob_path = f"{self.folder_path}/{table_name_csv}" if self.folder_path else table_name_csv
+            blob = bucket.blob(blob_path)
 
+            if not blob.exists():
+                 print(f"Warning: Blob '{blob_path}' not found in bucket '{self.bucket_name}'. Skipping table.")
+                 return None
+
+            print(f"Loading {table_name_csv} from gs://{self.bucket_name}/{blob_path}...")
+            # Download content as bytes
+            content_bytes = blob.download_as_bytes()
+            # Read bytes into pandas DataFrame
+            # Using io.BytesIO avoids saving to a temporary file
+            df = pd.read_csv(io.BytesIO(content_bytes), low_memory=False)
+            print(f"{table_name_csv} loaded successfully. Shape: {df.shape}")
+            return df
         except Exception as e:
-            error_message = f"Pandasql Execution Error: {str(e)}"
-            print(error_message)
-            return f"Error executing query: {str(e)}"
+            print(f"Error loading table {table_name_csv} from GCS: {e}")
+            # Depending on requirements, you might want to raise the error
+            # or allow the app to continue without this table.
+            # raise e # Uncomment to make loading failure critical
+            return None # Return None if loading fails
+
+    def load_tables(self):
+        """Loads all required tables from GCS."""
+        print(f"Loading CSV tables from GCS bucket: '{self.bucket_name}', Folder: '{self.folder_path}'")
+        table_files = [
+            'Ad_table.csv', 'Price_table.csv', 'Sales_table.csv',
+            'Basic_table.csv', 'Trim_table.csv', 'Image_table.csv'
+        ]
+        # Dynamically assign to self.xxx_table attributes
+        for csv_file in table_files:
+             # Derive attribute name, e.g., 'Ad_table.csv' -> 'ad_table'
+             attr_name = csv_file.lower().replace('.csv', '')
+             df = self._load_single_table(csv_file)
+             setattr(self, attr_name, df) # Set self.ad_table, self.price_table etc.
+
+        # Optional: Check if essential tables were loaded
+        if getattr(self, 'ad_table', None) is None:
+             print("Critical Error: ad_table failed to load.")
+             # Handle critical failure appropriately - maybe raise exception
+
+        print("Finished loading tables.")
 
 
-# Optional: Singleton pattern if desired (usually good practice for resources)
-_db_instance = None
-def get_db_instance():
-    global _db_instance
-    if _db_instance is None:
-        print("Initializing singleton Database instance...")
-        _db_instance = Database()
-        print("Singleton Database instance initialized.")
-    return _db_instance
+    def run_query(self, query):
+        """
+        Executes a SQL query using pandasql on the loaded DataFrames.
+        """
+        try:
+            # Prepare the environment for pandasql, ensuring only loaded tables are included
+            env = {
+                'ad_table': getattr(self, 'ad_table', None),
+                'price_table': getattr(self, 'price_table', None),
+                'sales_table': getattr(self, 'sales_table', None),
+                'basic_table': getattr(self, 'basic_table', None),
+                'trim_table': getattr(self, 'trim_table', None),
+                'img_table': getattr(self, 'img_table', None),
+                'pd': pd
+            }
+            # Filter out any tables that failed to load (are None)
+            filtered_env = {k: v for k, v in env.items() if v is not None}
+
+            if not filtered_env:
+                 return "Error: No data tables were loaded successfully."
+
+            print(f"Executing SQL query: {query}") # Log the query
+            result = ps.sqldf(query, filtered_env)
+            print(f"Query returned {len(result)} rows.") # Log result size
+            return result.to_csv(index=False)
+        except Exception as e:
+            # Log the specific error
+            print(f"SQL Execution Error for query '{query}': {str(e)}")
+            return f"SQL Execution Error: {str(e)}"

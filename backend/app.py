@@ -1,80 +1,109 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from datetime import datetime
-from langchain_core.messages import AIMessage, HumanMessage
-
-import config # Import config first
-# --- Configuration & Initialization ---
-# Call setup_credentials early to check for ADC/keys
-config.setup_credentials()
-
-# Import other modules AFTER basic config/env vars might be needed
+# from config import setup_credentials # Removed - No longer needed
 from agents import create_sql_agent
-# We don't need to explicitly initialize DB here, agent_tools does it via get_db_instance()
+from agent_tools import set_database_instance
+from database import Database # Keep this
+from langchain.schema import AIMessage, HumanMessage
+import os
+import logging # Optional: Improve logging
 
-# --- Flask App Initialization ---
-app = Flask(__name__)
-CORS(app)
+# Configure logging
+logging.basicConfig(level=logging.INFO)
 
-# --- Agent Initialization ---
-# This will trigger the DB initialization via agent_tools -> get_db_instance()
+# Initialize credentials and the agent
+# setup_credentials() # Removed - ADC handles this
+
+# --- Get GCS configuration from App Engine Environment Variables ---
+gcs_bucket_name = os.environ.get("TABLES_BUCKET")
+gcs_folder_path = os.environ.get("TABLES_FOLDER") # Can be empty string if files are in bucket root
+
+if not gcs_bucket_name:
+    logging.error("FATAL: TABLES_BUCKET environment variable not set.")
+    # Decide how to handle this - exit or try to run degraded?
+    # For now, we'll let the Database class raise an error later.
+    pass
+
+agent_executor = create_sql_agent()
+
+# --- Initialize Database with GCS config ---
 try:
-    agent_executor = create_sql_agent()
-    print("Flask App: Agent executor initialized (DB loading should have occurred).")
+    db = Database(bucket_name=gcs_bucket_name, folder_path=gcs_folder_path)
+    set_database_instance(db)
+    logging.info("Database initialized successfully from GCS.")
 except Exception as e:
-    print(f"FATAL: Failed to initialize agent executor (check DB loading?): {e}")
-    agent_executor = None
+    logging.error(f"FATAL: Failed to initialize database from GCS: {e}")
+    # Handle inability to start - maybe return errors on API calls
+    db = None # Ensure db is None if initialization fails
+    set_database_instance(None)
 
-# --- API Routes ---
-@app.route('/api/chat', methods=['POST'])
+# --- In-memory chat history (Simple approach) ---
+# Note: This history is lost if the instance restarts or scales down/up.
+# For persistent history across requests/instances, you'd need an external store
+# (like Firestore, Memorystore, or a database).
+chat_history = [] # Global variable
+
+app = Flask(__name__)
+CORS(app, resources={r"/api/*": {"origins": "*"}})
+
+@app.route('/api/chat', methods=['POST', 'OPTIONS'])
 def chat():
-    """Handles incoming chat messages and returns the agent's response."""
-    if agent_executor is None:
-         # More specific error if DB loading likely failed
-         return jsonify({"error": "Agent not available. Check backend logs (potential data loading issue)."}), 500
+    global chat_history # <<< ADD THIS LINE
 
-    data = request.json
-    user_message = data.get("message")
-    history_raw = data.get("history", [])
+    # Handle OPTIONS (though CORS should intercept)
+    if request.method == 'OPTIONS':
+         logging.info("Received OPTIONS request for /api/chat - Flask-CORS should have handled this.")
+         resp = app.make_default_options_response()
+         # Add headers Flask-CORS would have added
+         h = resp.headers
+         h['Access-Control-Allow-Origin'] = '*'
+         h['Access-Control-Allow-Methods'] = resp.headers.get('Allow', 'POST, OPTIONS')
+         h['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+         h['Access-Control-Max-Age'] = '86400'
+         return resp
 
-    if not user_message:
-        return jsonify({"error": "No message provided."}), 400
+    # --- Handle POST request ---
+    if db is None or getattr(db, 'ad_table', None) is None:
+         logging.error("Chat request (POST) received but database is not ready.")
+         return jsonify({"error": "Server error: Database not available or not loaded correctly."}), 503
 
-    # Convert frontend history format to LangChain Message objects
-    chat_history = []
-    for msg in history_raw:
-        if msg.get("sender") == "user":
-            chat_history.append(HumanMessage(content=msg.get("message", "")))
-        elif msg.get("sender") == "agent":
-            chat_history.append(AIMessage(content=msg.get("message", "")))
+    data = request.get_json()
+    if not data or "message" not in data:
+        return jsonify({"error": "Missing 'message' in request body"}), 400
 
+    user_input = data.get("message")
+    logging.info(f"Received chat message (POST): {user_input}")
+
+    # Now it correctly reads the global chat_history
     agent_input = {
-        "input": user_message,
-        "chat_history": chat_history
+        "input": user_input,
+        "chat_history": chat_history,
     }
 
     try:
-        # Invoke the agent
-        response = agent_executor.invoke(agent_input)
-        agent_response = response.get("output", "Sorry, I encountered an issue processing your request.")
+        if agent_executor is None:
+             logging.error("Agent executor not initialized.")
+             return jsonify({"error": "Server error: Agent not available."}), 503
 
-        return jsonify({
-            "response": agent_response,
-            "timestamp": datetime.now().isoformat()
-        })
+        result = agent_executor.invoke(agent_input)
+        response_content = result.get("output", "Agent did not return an output.")
+
+        # Now it correctly modifies the global chat_history
+        chat_history.append(HumanMessage(content=user_input))
+        chat_history.append(AIMessage(content=response_content))
+        max_history = 20
+        if len(chat_history) > max_history:
+            chat_history = chat_history[-max_history:] # Assignment is fine now
+
+        logging.info(f"Agent response: {response_content}")
+        return jsonify({"response": response_content})
+
     except Exception as e:
-        print(f"Error during agent invocation: {e}")
-        return jsonify({"error": f"An error occurred: {e}"}), 500
+        logging.error(f"Error during agent invocation: {e}", exc_info=True)
+        return jsonify({"error": f"An internal error occurred during agent processing: {e}"}), 500
+    # --- End POST request handling ---
 
-@app.route('/health', methods=['GET'])
-def health_check():
-     """Basic health check endpoint."""
-     # Could add a check here to see if db_instance in agent_tools is not None
-     status = "ok" if agent_executor is not None else "error: agent not initialized"
-     code = 200 if agent_executor is not None else 500
-     return jsonify({"status": status}), code
+# ... (health_check function and __main__ block remain the same) ...
 
-# --- Main Execution ---
 if __name__ == '__main__':
-    # Use Flask's development server for local testing
-    app.run(debug=True, port=5000, host='0.0.0.0')
+    app.run(debug=False, port=int(os.environ.get('PORT', 8080)), host='0.0.0.0')

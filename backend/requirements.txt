@@ -1,12 +1,20 @@
-Flask==3.0.3
-Flask-Cors==4.0.1
-gunicorn==22.0.0
-requests==2.32.3
-langchain==0.2.11 # Or latest stable
-langchain-google-vertexai==1.0.7 # Or latest stable
-google-cloud-aiplatform==1.59.0 # Or latest stable
-google-cloud-secret-manager==2.20.0
-google-cloud-storage==2.17.0 # Needed for downloading CSVs
-pandas==2.2.2
-pandasql==0.7.3 # Re-added
-python-dotenv==1.0.1
+# Flask and Web Server
+Flask>=2.0.0
+Flask-Cors>=3.0.0
+gunicorn>=20.0.0
+uvicorn>=0.15.0 # Needed for gunicorn worker class
+
+# LangChain Core and Vertex AI Integration
+langchain>=0.1.0,<0.2 # Pin major/minor version for stability
+langchain-google-vertexai>=0.1.0 # Check for latest compatible version
+
+# Google Cloud Client Libraries
+google-cloud-aiplatform>=1.25.0 # Check for compatibility with langchain-google-vertexai
+google-cloud-storage>=2.0.0
+
+# Data Handling
+pandas>=1.3.0,<3.0.0 # Keep pandasql compatibility in mind
+pandasql>=0.7.0
+
+# Pydantic (likely used by LangChain tools/agents)
+pydantic>=1.8.0,<3.0.0
