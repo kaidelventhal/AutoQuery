@@ -6,7 +6,7 @@ README.md:
 
 ## Project Description
 
-AutoQuery AI is an intelligent vehicle recommendation and query assistant deployed on Google Cloud. It helps users find vehicle information by asking questions in natural language. Leveraging Google Vertex AI's language models and LangChain for orchestration, AutoQuery AI translates user requests into SQL queries executed against a vehicle dataset stored in Google Cloud Storage.
+AutoQuery AI is an intelligent vehicle recommendation and query assistant deployed on Google Cloud. It helps users find vehicle information by asking questions in natural language. Leveraging Google Vertex AI's language models and LangChain for orchestration, AutoQuery AI translates user requests Agenticaly into SQL queries executed against a vehicle dataset stored in Google Cloud Storage.
 
 ## How It Works
 
@@ -156,99 +156,6 @@ The application is designed for Google App Engine Standard Environment using two
 AutoQuery AI demonstrates the power of combining LLMs (Vertex AI), orchestration frameworks (LangChain), cloud services (GCP App Engine, GCS), and data manipulation libraries (Pandas, Pandasql) to create interactive, data-driven applications. It showcases skills in backend development, API design, cloud deployment, and AI integration.
 </code>
 
-test.py:
-<code>
-import os
-import pandas as pd
-import pandasql as ps
-
-# === SETUP: Define your table directory and load CSV files ===
-
-# Update this path to the location of your downloaded DVM-CAR tables
-TABLE_DIR = r'C:\Users\kdelv\Documents\tables_V2.0'
-
-# Load the CSV tables into pandas DataFrames
-ad_table = pd.read_csv(os.path.join(TABLE_DIR, 'Ad_table.csv'))
-price_table = pd.read_csv(os.path.join(TABLE_DIR, 'Price_table.csv'))
-sales_table = pd.read_csv(os.path.join(TABLE_DIR, 'Sales_table.csv'))
-basic_table = pd.read_csv(os.path.join(TABLE_DIR, 'Basic_table.csv'))
-trim_table = pd.read_csv(os.path.join(TABLE_DIR, 'Trim_table.csv'))
-img_table = pd.read_csv(os.path.join(TABLE_DIR, 'Image_table.csv'))
-
-# === FUNCTION: Run SQL queries on the DataFrames using pandasql ===
-
-def run_query(query, env):
-    """
-    Executes an SQL query on pandas DataFrames using pandasql.
-    
-    :param query: SQL query string.
-    :param env: Dictionary containing the environment variables (e.g., DataFrames).
-    :return: A DataFrame with the query results.
-    """
-    return ps.sqldf(query, env)
-
-# === FUNCTION: Dummy natural language to SQL converter ===
-
-def simulate_nl_to_sql(nl_query):
-    """
-    Dummy function to simulate the conversion of a natural language query to an SQL query.
-    In a production version, replace this function with one that uses an LLM (via LangChain or similar)
-    to generate SQL queries.
-    
-    :param nl_query: A natural language query string.
-    :return: An SQL query string.
-    """
-    nl_query_lower = nl_query.lower()
-    if "2018" in nl_query_lower and "saloon" in nl_query_lower:
-        sql_query = """
-        SELECT * FROM ad_table
-        WHERE Reg_year = 2018 AND Bodytype = 'Saloon'
-        """
-    elif "price" in nl_query_lower:
-        sql_query = """
-        SELECT a.Genmodel_ID, a.Maker, a.Genmodel, p.Year, p.Price
-        FROM ad_table AS a
-        JOIN price_table AS p ON a.Genmodel_ID = p.Genmodel_ID
-        WHERE p.Year = 2018
-        """
-    else:
-        sql_query = "SELECT * FROM ad_table LIMIT 5"
-    
-    return sql_query
-
-# === MAIN FUNCTION: Interactive Query Agent ===
-
-def main():
-    print("Welcome to AutoSensei Query Interface!")
-    print("Enter your natural language query to retrieve data from the automotive database.")
-    print("Type 'exit' to quit.\n")
-    
-    while True:
-        nl_query = input("Your query: ").strip()
-        if nl_query.lower() == 'exit':
-            print("Exiting. Thank you!")
-            break
-        
-        # Convert the natural language query to an SQL query.
-        # (Later, integrate with an LLM-powered conversion using LangChain)
-        sql_query = simulate_nl_to_sql(nl_query)
-        print("\n[DEBUG] Generated SQL Query:")
-        print(sql_query)
-        
-        # Run the SQL query using pandasql.
-        # Passing globals() gives pandasql access to your DataFrames.
-        try:
-            result_df = run_query(sql_query, globals())
-            print("\nQuery Results:")
-            print(result_df.head(), "\n")
-        except Exception as e:
-            print("Error executing query:", e)
-
-if __name__ == "__main__":
-    main()
-
-</code>
-
 backend\agents.py:
 <code>
 # agents.py
@@ -300,11 +207,10 @@ backend\agent_tools.py:
 # agent_tools.py
 from pydantic import BaseModel, Field
 from langchain.agents import tool
-# Remove the incorrect import: from database import get_db_instance
-from database import Database # Ensure Database class is imported if needed for type hinting, but not essential here
+from database import Database # Import the NEW Database class
 
 # This global variable will hold the database instance set by app.py
-db_instance = None
+db_instance: Database | None = None # Added type hint for clarity
 
 def set_database_instance(db: Database):
     """Sets the shared database instance."""
@@ -315,397 +221,339 @@ def set_database_instance(db: Database):
 class SQLQueryInput(BaseModel):
     query: str = Field(..., description="The SQL query to execute on the automotive database.")
 
-@tool #removed(args_schema=SQLQueryInput) because args schema is not defined in the tool call in the agents.py file
+@tool
 def execute_sql(query: str) -> str:
     """
-    Execute the provided SQL query on the automotive database and return the results as CSV.
+    Execute the provided SQL query on the automotive database (Cloud SQL) and return the results as CSV.
     Use this tool to run SELECT queries against the available tables (ad_table, price_table, sales_table, etc.).
-    Provide the complete SQL query as the input string.
+    Provide the complete standard SQL query as the input string.
     """
     print(f"Executing SQL via tool. DB instance type: {type(db_instance)}") # Add print for debugging
     if db_instance is None:
         print("Error: execute_sql called but database instance is None.") # Add print for debugging
         return "Error: Database not initialized in the application."
     try:
-        # Assuming db_instance is an instance of your Database class
+        # db_instance is now an instance of the new Database class connecting to Cloud SQL
         result_csv = db_instance.run_query(query)
-        # Ensure the result is a string. run_query already returns CSV string or error string.
+        # Ensure the result is a string. run_query should return CSV string or error string.
         if isinstance(result_csv, str):
-             # Limit result size to prevent excessively large responses if necessary
-             max_length = 5000 # Example limit, adjust as needed
-             if len(result_csv) > max_length:
-                  return result_csv[:max_length] + "\n... (results truncated)"
-             return result_csv
+            # Limit result size to prevent excessively large responses if necessary
+            max_length = 5000 # Example limit, adjust as needed
+            if len(result_csv) > max_length:
+                # Truncate large results
+                truncated_msg = "\n... (results truncated)"
+                # Try to keep header if possible
+                header_end = result_csv.find('\n')
+                if header_end != -1:
+                    header = result_csv[:header_end+1]
+                    return header + result_csv[header_end+1:max_length - len(truncated_msg) - len(header)] + truncated_msg
+                else: # If no newline (single line result?)
+                     return result_csv[:max_length - len(truncated_msg)] + truncated_msg
+            return result_csv
         else:
-             # Should not happen if run_query works as expected, but handle just in case
-             return "Error: Query execution returned an unexpected data type."
+            # Should not happen if run_query works as expected, but handle just in case
+            print(f"Warning: run_query returned unexpected type: {type(result_csv)}")
+            return "Error: Query execution returned an unexpected data type."
     except Exception as e:
-        print(f"Error during execute_sql: {e}") # Log exception
+        print(f"Error during execute_sql tool execution: {e}", exc_info=True) # Log exception
         # Return a user-friendly error message
-        return f"Error executing SQL query: {str(e)}"
+        return f"Error executing SQL query via tool: {str(e)}"
 </code>
 
 backend\app.py:
 <code>
+# backend/app.py
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-# from config import setup_credentials # Removed - No longer needed
 from agents import create_sql_agent
 from agent_tools import set_database_instance
-from database import Database # Keep this
+from database import Database # Import the SQLite Database class
 from langchain.schema import AIMessage, HumanMessage
 import os
-import logging # Optional: Improve logging
+import logging
+import signal
+import sys
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 
-# Initialize credentials and the agent
-# setup_credentials() # Removed - ADC handles this
-
-# --- Get GCS configuration from App Engine Environment Variables ---
-gcs_bucket_name = os.environ.get("TABLES_BUCKET")
-gcs_folder_path = os.environ.get("TABLES_FOLDER") # Can be empty string if files are in bucket root
-
-if not gcs_bucket_name:
-    logging.error("FATAL: TABLES_BUCKET environment variable not set.")
-    # Decide how to handle this - exit or try to run degraded?
-    # For now, we'll let the Database class raise an error later.
-    pass
-
-agent_executor = create_sql_agent()
-
-# --- Initialize Database with GCS config ---
+# --- Initialize Database ---
+db = None
 try:
-    db = Database(bucket_name=gcs_bucket_name, folder_path=gcs_folder_path)
+    # Instantiate the SQLite Database class
+    db = Database()
     set_database_instance(db)
-    logging.info("Database initialized successfully from GCS.")
+    # Optional: Add a check here to see if the DB file actually exists
+    # This relies on the logic within Database.__init__ and run_query
+    logging.info("Database object initialized for SQLite file.")
 except Exception as e:
-    logging.error(f"FATAL: Failed to initialize database from GCS: {e}")
-    # Handle inability to start - maybe return errors on API calls
-    db = None # Ensure db is None if initialization fails
+    logging.error(f"FATAL: Failed to initialize Database object: {e}", exc_info=True)
+    db = None
     set_database_instance(None)
 
-# --- In-memory chat history (Simple approach) ---
-# Note: This history is lost if the instance restarts or scales down/up.
-# For persistent history across requests/instances, you'd need an external store
-# (like Firestore, Memorystore, or a database).
-chat_history = [] # Global variable
+# --- Initialize Agent ---
+agent_executor = None
+if db: # Check if db object was created (doesn't guarantee file exists yet)
+    try:
+        agent_executor = create_sql_agent()
+        logging.info("LangChain Agent created successfully.")
+    except Exception as e:
+        logging.error(f"FATAL: Failed to create LangChain agent: {e}", exc_info=True)
+        agent_executor = None
+else:
+    logging.warning("Database object initialization failed, skipping agent creation.")
 
+chat_history = []
 app = Flask(__name__)
+# This CORS config SHOULD work once the 500 error is fixed
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 @app.route('/api/chat', methods=['POST', 'OPTIONS'])
 def chat():
-    global chat_history # <<< ADD THIS LINE
-
-    # Handle OPTIONS (though CORS should intercept)
+    # If it is an OPTIONS request, return an empty successful response
     if request.method == 'OPTIONS':
-         logging.info("Received OPTIONS request for /api/chat - Flask-CORS should have handled this.")
-         resp = app.make_default_options_response()
-         # Add headers Flask-CORS would have added
-         h = resp.headers
-         h['Access-Control-Allow-Origin'] = '*'
-         h['Access-Control-Allow-Methods'] = resp.headers.get('Allow', 'POST, OPTIONS')
-         h['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
-         h['Access-Control-Max-Age'] = '86400'
-         return resp
+        # Return an empty 200 response with the required headers
+        response = app.make_default_options_response()
+        # Optionally, you can add additional CORS headers here if needed:
+        headers = response.headers
+        headers['Access-Control-Allow-Origin'] = '*'
+        headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
+        headers['Access-Control-Allow-Headers'] = 'Content-Type'
+        return response
 
-    # --- Handle POST request ---
-    if db is None or getattr(db, 'ad_table', None) is None:
-         logging.error("Chat request (POST) received but database is not ready.")
-         return jsonify({"error": "Server error: Database not available or not loaded correctly."}), 503
-
+    # For POST, continue with processing
     data = request.get_json()
     if not data or "message" not in data:
+        logging.warning("Received invalid chat request: Missing 'message'")
         return jsonify({"error": "Missing 'message' in request body"}), 400
 
-    user_input = data.get("message")
-    logging.info(f"Received chat message (POST): {user_input}")
+    # ... rest of your POST processing
+    result = agent_executor.invoke({"input": data.get("message"), "chat_history": chat_history})
+    response_content = result.get("output", "Agent did not return an output.")
+    chat_history.append(HumanMessage(content=data.get("message")))
+    chat_history.append(AIMessage(content=response_content))
+    return jsonify({"response": response_content})
 
-    # Now it correctly reads the global chat_history
-    agent_input = {
-        "input": user_input,
-        "chat_history": chat_history,
-    }
+@app.route('/_ah/warmup')
+def warmup():
+    logging.info("Warmup request received.")
+    # --- CORRECTED CHECK ---
+    if db is None:
+         logging.warning("Warmup: Database object not initialized.")
+    # You could try calling db._get_connection() here to test connectivity early
+    # try:
+    #      conn = db._get_connection()
+    #      conn.close()
+    #      logging.info("Warmup: DB connection test successful.")
+    # except Exception as e:
+    #      logging.error(f"Warmup: DB connection test failed: {e}")
+    # --- End Corrected Check ---
+    return '', 200, {}
 
-    try:
-        if agent_executor is None:
-             logging.error("Agent executor not initialized.")
-             return jsonify({"error": "Server error: Agent not available."}), 503
+@app.route('/healthz')
+def healthz():
+    # --- CORRECTED CHECK ---
+     if db: # Basic check: is the Database object instantiated?
+         # More robust: try a quick connection/query
+         try:
+              conn = db._get_connection()
+              # Optional: Run a super simple query like "SELECT 1"
+              # cursor = conn.cursor()
+              # cursor.execute("SELECT 1")
+              # cursor.fetchone()
+              conn.close()
+              return "OK", 200
+         except Exception as e:
+              logging.error(f"Health check DB connection failed: {e}")
+              return "Service Unavailable (DB connection failed)", 503
+     else:
+          return "Service Unavailable (DB init failed)", 503
+    # --- End Corrected Check ---
 
-        result = agent_executor.invoke(agent_input)
-        response_content = result.get("output", "Agent did not return an output.")
+# --- Graceful Shutdown Handling ---
+# Remove db.close_connection() call as SQLite connections are short-lived
+def cleanup(signum, frame):
+    logging.info("Received shutdown signal. Cleaning up...")
+    # No persistent DB connection pool to close for SQLite used this way
+    logging.info("Cleanup complete (no persistent DB pool to close). Exiting.")
+    sys.exit(0)
 
-        # Now it correctly modifies the global chat_history
-        chat_history.append(HumanMessage(content=user_input))
-        chat_history.append(AIMessage(content=response_content))
-        max_history = 20
-        if len(chat_history) > max_history:
-            chat_history = chat_history[-max_history:] # Assignment is fine now
+signal.signal(signal.SIGTERM, cleanup)
+signal.signal(signal.SIGINT, cleanup)
 
-        logging.info(f"Agent response: {response_content}")
-        return jsonify({"response": response_content})
-
-    except Exception as e:
-        logging.error(f"Error during agent invocation: {e}", exc_info=True)
-        return jsonify({"error": f"An internal error occurred during agent processing: {e}"}), 500
-    # --- End POST request handling ---
-
-# ... (health_check function and __main__ block remain the same) ...
-
+# --- Main Execution ---
 if __name__ == '__main__':
+    logging.warning("Running Flask development server (for local testing only).")
+    # Ensure DB file exists locally for testing
+    if db:
+         logging.info(f"Local testing with DB path: {db.db_path}")
+    else:
+         logging.error("DB object not created for local testing.")
     app.run(debug=False, port=int(os.environ.get('PORT', 8080)), host='0.0.0.0')
-
 </code>
 
 backend\app.yaml:
 <code>
 runtime: python312
-service: backend
-# --- UPDATED ENTRYPOINT ---
-entrypoint: gunicorn -b :$PORT -w 2 --threads 4 -k gthread app:app --timeout 120 --log-level info # Changed worker to gthread
+service: backend # Or your desired service name
+entrypoint: gunicorn -b :$PORT -w 2 --threads 4 -k gthread app:app --timeout 120 --log-level info
 
-instance_class: F4_1G # Keep F4 for memory
+instance_class: F4 # Use F1 for free tier eligibility, monitor performance/memory
 
 env_variables:
-  GOOGLE_CLOUD_PROJECT: "autoquery-454320"
-  TABLES_BUCKET: "autoquery-csv-data"
-  TABLES_FOLDER: "tables_V2.0"
-  # GCP_REGION: "us-central1" # Optional
+  GOOGLE_CLOUD_PROJECT: "autoquery-454320" # Needed for Vertex AI client
+  # Add any other non-secret environment variables your app needs
+  # NO database connection vars needed here
 
 automatic_scaling:
+  min_instances: 0 # Allows scaling to zero for cost savings
+  max_instances: 2 # Set a reasonable limit for a personal project
   target_cpu_utilization: 0.75
-  min_instances: 0
-  max_instances: 3
-  # target_memory_utilization: 0.75
+  # Consider target_concurrent_requests if needed
+
+# Ensure all necessary APIs are enabled in your GCP project (App Engine, Vertex AI)
 
 handlers:
-- url: /.*
+- url: /.* # Route all traffic to your app
   script: auto
-  secure: always
-</code>
+  secure: always # Enforce HTTPS
 
-backend\config.py:
-<code>
-# config.py
-import os
-
-# No hardcoded paths needed here anymore.
-# App Engine uses Application Default Credentials (ADC) automatically
-# for Google Cloud client libraries (like Vertex AI and Cloud Storage).
-# GCS Bucket/Folder configuration is now handled via environment variables
-# set in app.yaml and read directly in app.py/database.py.
-
-# You can keep this file empty or remove it if nothing else needs configuration here.
-# If keeping it, ensure setup_credentials() is NOT called from app.py or main.py.
-
-# Let's leave it empty for now. You could add other non-sensitive config later.
-pass
+# Add warmup handler if needed (app.py includes a basic one)
+inbound_services:
+  - warmup
 </code>
 
 backend\database.py:
 <code>
-# database.py
+# backend/database.py
 import os
+import sqlite3
 import pandas as pd
-import pandasql as ps
-from google.cloud import storage # Added
-import io # Added
+import io
+import logging
+
+logging.basicConfig(level=logging.INFO)
+
+# --- Configuration ---
+# Determine the absolute path to the directory containing this script
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# Construct the path to the database file relative to this script's location
+DB_FILENAME = "autoquery_data.db"
+DB_FILE_PATH = os.path.join(_BASE_DIR, DB_FILENAME)
+# --- End Configuration ---
 
 class Database:
-    def __init__(self, bucket_name, folder_path):
-        """
-        Initializes the Database by loading CSV tables from Google Cloud Storage.
+    def __init__(self):
+        self.db_path = DB_FILE_PATH
+        logging.info(f"Database object initialized for SQLite file: {self.db_path}")
+        if not os.path.exists(self.db_path):
+             # This might happen during local testing if the DB isn't generated yet,
+             # but should not happen in App Engine if deployment included the file.
+             logging.warning(f"Database file not found at {self.db_path} during init.")
 
-        Args:
-            bucket_name (str): The name of the GCS bucket containing the CSV files.
-            folder_path (str): The folder path within the bucket where CSVs are located (e.g., 'tables_V2.0'). Can be empty if files are in root.
-        """
-        if not bucket_name:
-            raise ValueError("GCS Bucket name is required.")
-
-        self.bucket_name = bucket_name
-        self.folder_path = folder_path.strip('/') # Ensure no leading/trailing slashes for consistency
-        self.storage_client = storage.Client()
-        self.tables = {} # Dictionary to hold loaded tables
-        self.load_tables()
-
-    def _load_single_table(self, table_name_csv):
-        """Loads a single table from GCS."""
+    def _get_connection(self):
+        """Establishes a read-only connection to the SQLite database."""
         try:
-            bucket = self.storage_client.bucket(self.bucket_name)
-            blob_path = f"{self.folder_path}/{table_name_csv}" if self.folder_path else table_name_csv
-            blob = bucket.blob(blob_path)
+            if not os.path.exists(self.db_path):
+                 raise FileNotFoundError(f"SQLite DB file not found: {self.db_path}")
+            # Connect using file path and READ-ONLY mode
+            # uri=True allows using mode=ro parameter
+            conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=10)
+            logging.info(f"Connected to SQLite DB (read-only): {self.db_path}")
+            return conn
+        except sqlite3.Error as e:
+            # Check if error is because file doesn't exist or isn't a DB
+            logging.error(f"Error connecting to SQLite database {self.db_path}: {e}", exc_info=True)
+            raise
 
-            if not blob.exists():
-                 print(f"Warning: Blob '{blob_path}' not found in bucket '{self.bucket_name}'. Skipping table.")
-                 return None
-
-            print(f"Loading {table_name_csv} from gs://{self.bucket_name}/{blob_path}...")
-            # Download content as bytes
-            content_bytes = blob.download_as_bytes()
-            # Read bytes into pandas DataFrame
-            # Using io.BytesIO avoids saving to a temporary file
-            df = pd.read_csv(io.BytesIO(content_bytes), low_memory=False)
-            print(f"{table_name_csv} loaded successfully. Shape: {df.shape}")
-            return df
-        except Exception as e:
-            print(f"Error loading table {table_name_csv} from GCS: {e}")
-            # Depending on requirements, you might want to raise the error
-            # or allow the app to continue without this table.
-            # raise e # Uncomment to make loading failure critical
-            return None # Return None if loading fails
-
-    def load_tables(self):
-        """Loads all required tables from GCS."""
-        print(f"Loading CSV tables from GCS bucket: '{self.bucket_name}', Folder: '{self.folder_path}'")
-        table_files = [
-            'Ad_table.csv', 'Price_table.csv', 'Sales_table.csv',
-            'Basic_table.csv', 'Trim_table.csv', 'Image_table.csv'
-        ]
-        # Dynamically assign to self.xxx_table attributes
-        for csv_file in table_files:
-             # Derive attribute name, e.g., 'Ad_table.csv' -> 'ad_table'
-             attr_name = csv_file.lower().replace('.csv', '')
-             df = self._load_single_table(csv_file)
-             setattr(self, attr_name, df) # Set self.ad_table, self.price_table etc.
-
-        # Optional: Check if essential tables were loaded
-        if getattr(self, 'ad_table', None) is None:
-             print("Critical Error: ad_table failed to load.")
-             # Handle critical failure appropriately - maybe raise exception
-
-        print("Finished loading tables.")
-
-
-    def run_query(self, query):
-        """
-        Executes a SQL query using pandasql on the loaded DataFrames.
-        """
+    def run_query(self, query: str) -> str:
+        """Executes a SQL query against the read-only SQLite database."""
+        logging.info(f"Attempting to execute SQLite query (RO mode): {query[:500]}...")
+        conn = None
         try:
-            # Prepare the environment for pandasql, ensuring only loaded tables are included
-            env = {
-                'ad_table': getattr(self, 'ad_table', None),
-                'price_table': getattr(self, 'price_table', None),
-                'sales_table': getattr(self, 'sales_table', None),
-                'basic_table': getattr(self, 'basic_table', None),
-                'trim_table': getattr(self, 'trim_table', None),
-                'img_table': getattr(self, 'img_table', None),
-                'pd': pd
-            }
-            # Filter out any tables that failed to load (are None)
-            filtered_env = {k: v for k, v in env.items() if v is not None}
+            conn = self._get_connection()
+            # Using pandas read_sql_query still works fine with the connection object
+            result_df = pd.read_sql_query(query, conn)
+            logging.info(f"Query returned {len(result_df)} rows.")
 
-            if not filtered_env:
-                 return "Error: No data tables were loaded successfully."
+            if result_df.empty:
+                # Return headers only for empty results
+                return ",".join(result_df.columns) + "\n" if result_df.columns.tolist() else ""
+            else:
+                csv_buffer = io.StringIO()
+                result_df.to_csv(csv_buffer, index=False)
+                csv_output = csv_buffer.getvalue()
+                return csv_output
 
-            print(f"Executing SQL query: {query}") # Log the query
-            result = ps.sqldf(query, filtered_env)
-            print(f"Query returned {len(result)} rows.") # Log result size
-            return result.to_csv(index=False)
+        except FileNotFoundError as e:
+             logging.error(f"Query failed because DB file was not found: {e}")
+             return f"Error: Database file missing at {self.db_path}."
+        except sqlite3.OperationalError as db_err:
+             # Specific check for write attempts on read-only DB
+             if "attempt to write a readonly database" in str(db_err):
+                 logging.error(f"Write rejected on read-only DB. Query: '{query[:200]}...'", exc_info=False)
+                 return f"Error: Database is read-only ({db_err})"
+             else:
+                 logging.error(f"SQLite Operational Error: {db_err}. Query: '{query[:200]}...'", exc_info=True)
+                 return f"SQL Execution Error: {str(db_err)}"
+        except sqlite3.Error as db_err:
+            logging.error(f"General SQLite Error: {db_err}. Query: '{query[:200]}...'", exc_info=True)
+            return f"SQL Execution Error: {str(db_err)}"
         except Exception as e:
-            # Log the specific error
-            print(f"SQL Execution Error for query '{query}': {str(e)}")
-            return f"SQL Execution Error: {str(e)}"
-</code>
-
-backend\history.py:
-<code>
-# history.py
-import json
-import os
-
-HISTORY_FILE = "chat_history.json"
-
-def load_history():
-    """
-    Load chat history from a JSON file.
-    Returns a list of history items.
-    """
-    if os.path.exists(HISTORY_FILE):
-        with open(HISTORY_FILE, "r") as f:
-            return json.load(f)
-    return []
-
-def save_history(history):
-    """
-    Save chat history (a list of dictionaries) to a JSON file.
-    """
-    with open(HISTORY_FILE, "w") as f:
-        json.dump(history, f, indent=2)
-
+            logging.error(f"Unexpected error during query execution: {e}", exc_info=True)
+            return f"Unexpected Error: {str(e)}"
+        finally:
+            if conn:
+                conn.close()
+                logging.info("SQLite connection closed.")
 </code>
 
 backend\main.py:
 <code>
 # main.py
 import os
-# from config import setup_credentials # Removed call
-from database import Database
+import logging
+from database import Database # Import the NEW Database class
 from agent_tools import set_database_instance
 from agents import create_sql_agent
 from langchain.schema import AIMessage, HumanMessage
 
 # --- FOR LOCAL TESTING ONLY ---
-# This script is primarily for running the chat interface locally in the terminal.
-# It does NOT use GCS by default unless you manually set environment variables.
-# The `app.py` file is the entry point for App Engine deployment using Gunicorn.
+# Requires setting environment variables for DB connection:
+# GOOGLE_CLOUD_PROJECT, INSTANCE_CONNECTION_NAME, DB_USER, DB_PASS, DB_NAME
+# Recommend running the Cloud SQL Auth Proxy locally for secure connection.
+
+logging.basicConfig(level=logging.INFO)
 
 def main():
-    # setup_credentials() # Removed call
+    print("--- Running Local Test Mode (Connecting to Cloud SQL) ---")
+    print("Ensure DB environment variables are set and Cloud SQL Auth Proxy is running (recommended).")
 
-    # --- Attempt to load local config if available for testing ---
-    # For local testing, you might temporarily set environment variables
-    # or modify this section to load from a local path again.
-    # Example using local path for testing:
-    tables_dir_local = "C:/Users/kdelv/Documents/tables_V2.0" # <<< Or your local path
-    print(f"--- Running Local Test Mode ---")
-    print(f"Attempting to load tables from LOCAL directory: {tables_dir_local}")
-    print("NOTE: Deployment uses GCS via environment variables in app.yaml.")
+    db = None
+    agent_executor = None
 
+    # --- Initialize Database Connection ---
     try:
-        # Temporarily simulate Database class structure for local files if needed
-        # OR adjust Database class temporarily for local testing path.
-        # This example assumes you might manually point Database to local path
-        # IF you modify Database class or pass a local path handler.
-        # For simplicity, we'll rely on the GCS path if env vars are set,
-        # otherwise it might fail if not running in GAE context.
-
-        # If you want robust local testing mirroring GAE:
-        # 1. Set TABLES_BUCKET/TABLES_FOLDER env vars locally.
-        # 2. Ensure your local machine is authenticated (`gcloud auth application-default login`).
-        # 3. Run this script. It should then use the GCS version of Database.
-
-        # Simplified local path loading for basic testing (requires modifying Database or using dummy data)
-        # This part is tricky because Database is now GCS-focused.
-        # Easiest local test: Set env vars and use ADC as described above.
-        # If you *must* use local files without ADC/GCS for testing:
-        # You would need to conditionally change the Database init or loading logic.
-
-        # Assuming env vars are set locally and ADC login is done for local GCS test:
-        gcs_bucket = os.environ.get("TABLES_BUCKET")
-        gcs_folder = os.environ.get("TABLES_FOLDER")
-        if not gcs_bucket:
-             print("WARNING: TABLES_BUCKET env var not set for local test. Database init might fail.")
-             # raise Exception("Set TABLES_BUCKET and TABLES_FOLDER env vars for local GCS test.")
-             # Or fallback to a dummy/local path version of Database if implemented
-             return # Exit if no bucket is defined for local test
-
-        db = Database(bucket_name=gcs_bucket, folder_path=gcs_folder)
+        db = Database() # Reads env vars internally
         set_database_instance(db)
-
+        print("Database connection pool initialized successfully.")
     except Exception as e:
-         print(f"Error setting up database for local test: {e}")
-         print("Ensure GCS environment variables are set and you are authenticated via 'gcloud auth application-default login'.")
-         return # Exit if setup fails
+        print(f"FATAL: Failed to initialize database connection: {e}")
+        print("Please check environment variables and Cloud SQL proxy/network.")
+        return # Exit if DB connection fails
+
+    # --- Initialize Agent ---
+    try:
+        agent_executor = create_sql_agent()
+        print("LangChain Agent created successfully.")
+    except Exception as e:
+        print(f"FATAL: Failed to create LangChain agent: {e}")
+        return # Exit if agent creation fails
 
     # In-memory chat history (list of LangChain message objects).
     chat_history = []
 
-    agent_executor = create_sql_agent()
-
-    print("\nWelcome to the AutoSQL Chat Interface (Local Test Mode)!")
+    print("\nWelcome to the AutoSQL Chat Interface (Local Cloud SQL Test Mode)!")
     print("Enter your natural language queries (type 'exit' to quit).")
 
     while True:
@@ -713,14 +561,13 @@ def main():
         if user_input.lower() == "exit":
             break
 
-        if db is None:
-             print("Agent: Database is not initialized. Cannot process query.")
-             continue
+        if db is None or db.pool is None or agent_executor is None:
+            print("Agent: Cannot process query. Database or Agent not ready.")
+            continue
 
         agent_input = {
             "input": user_input,
             "chat_history": chat_history,
-            # "agent_scratchpad": [] # Handled by AgentExecutor
         }
 
         try:
@@ -739,8 +586,14 @@ def main():
                 chat_history = chat_history[-max_history:]
 
         except Exception as e:
-            print(f"Error during local agent invocation: {e}")
+            print(f"\nError during local agent invocation: {e}")
+            logging.error("Local agent invocation error:", exc_info=True) # Log stack trace
 
+
+    # Cleanup connections on exit
+    if db:
+        db.close_connection()
+    print("Exiting local test mode.")
 
 if __name__ == "__main__":
     main()
@@ -754,51 +607,48 @@ from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 def get_sql_generation_prompt():
     """
     Create a prompt template that instructs the agent to convert a natural language query
-    into a valid SQL query for the automotive database.
+    into a valid SQL query for the automotive database hosted on Cloud SQL (PostgreSQL).
     """
+    # --- Updated System Message for Standard SQL (PostgreSQL) ---
     system_message = """
-        You are an AI assistant specialized in querying an automotive database using pandasql (SQLite syntax).
+        You are an AI assistant specialized in querying an automotive database hosted on Google Cloud SQL (using standard PostgreSQL syntax).
         Your goal is to answer user questions accurately by generating AND executing SQL queries against the available tables.
 
         **CRITICAL RULE:** You MUST generate only **ONE single valid SQL statement** per request to the `execute_sql` tool. Do NOT include multiple statements separated by semicolons or newlines in the `query` parameter for the tool. If a user asks a question that requires multiple independent queries (e.g., 'top seller for each year'), you MUST inform the user that you can only process one part at a time (e.g., 'I can find the top seller for a specific year. Please specify which year you're interested in.').
+        **1. Table Schemas and Relationships (SQLite Database File):**
+        The database is a single SQLite file (`autoquery_data.db`) included with the application, containing the following tables:
 
-        **1. Table Schemas and Relationships:**
+        * `ad_table`: Columns: `Maker`, `Genmodel`, `Genmodel_ID`, `Adv_ID`, `Adv_year`, `Adv_month`, `Color`, `Reg_year`, `Bodytype`, `Runned_Miles`, `Engin_size`, `Gearbox`, `Fuel_type`, `Price`, `Engine_power`, `Annual_Tax`, `Wheelbase`, `Height`, `Width`, `Length`, `Average_mpg`, `Top_speed`, `Seat_num`, `Door_num`. (Standard SQLite types like TEXT, INTEGER, REAL).
+        * `price_table`: Columns: `Maker`, `Genmodel`, `Genmodel_ID`, `Year`, `Entry_price`.
+        * `sales_table`: Columns: `Maker`, `Genmodel`, `Genmodel_ID`, `"2020"`, `"2019"`, `"2018"`, ..., `"2001"`. (IMPORTANT: Year columns are likely TEXT and named like `"2018"`. They MUST be double-quoted in the SQL query, e.g., `SELECT "2018" FROM sales_table`.)
+        * `basic_table`: Columns: `Automaker`, `Automaker_ID`, `Genmodel`, `Genmodel_ID`. **Warning:** Uses `Automaker`, others use `Maker`.
+        * `trim_table`: Columns: `Genmodel_ID`, `Maker`, `Genmodel`, `Trim`, `Year`, `Price`, `Gas_emission`, `Fuel_type`, `Engine_size`.
+        * `img_table`: Columns: `Genmodel_ID`, `Image_ID`, `Image_name`, `Predicted_viewpoint`, `Quality_check`.
 
-        * `ad_table`: Contains advertisement details. Columns: `Maker`, `Genmodel`, `Genmodel_ID`, `Adv_ID`, `Adv_year`, `Adv_month`, `Color`, `Reg_year`, `Bodytype`, `Runned_Miles`, `Engin_size`, `Gearbox`, `Fuel_type`, `Price`, `Engine_power`, `Annual_Tax`, `Wheelbase`, `Height`, `Width`, `Length`, `Average_mpg`, `Top_speed`, `Seat_num`, `Door_num`.
-        * `price_table`: Contains original pricing info. Columns: `Maker`, `Genmodel`, `Genmodel_ID`, `Year`, `Entry_price`.
-        * `sales_table`: Contains sales figures by year. Columns: `Maker`, `Genmodel`, `Genmodel_ID`, `"2020"`, `"2019"`, `"2018"`, `"2017"`, `"2016"`, `"2015"`, `"2014"`, `"2013"`, `"2012"`, `"2011"`, `"2010"`, `"2009"`, `"2008"`, `"2007"`, `"2006"`, `"2005"`, `"2004"`, `"2003"`, `"2002"`, `"2001"`. (Note: Year columns are strings and require double quotes in queries, e.g., `"2018"`).
-        * `basic_table`: Basic model and maker identifiers. Columns: `Automaker`, `Automaker_ID`, `Genmodel`, `Genmodel_ID`. **Warning:** This table uses `Automaker` for the manufacturer name, while most other tables use `Maker`. Use the correct column name based on the table you are querying.
-        * `trim_table`: Trim level details. Columns: `Genmodel_ID`, `Maker`, `Genmodel`, `Trim`, `Year`, `Price`, `Gas_emission`, `Fuel_type`, `Engine_size`.
-        * `img_table`: Image metadata. Columns: `Genmodel_ID`, `Image_ID`, `Image_name`, `Predicted_viewpoint`, `Quality_check`.
+        **IMPORTANT:** The database is read-only. Do not generate UPDATE, INSERT, or DELETE statements.
 
         **2. Common Join Keys:**
-        * Primary join fields: `Genmodel_ID`. Also `Maker`/`Automaker` and `Genmodel` where available.
-        * Example relationships:
-            * `sales_table` ↔ `price_table` (Use `Genmodel_ID`)
-            * `ad_table` ↔ `basic_table` (Use `Genmodel_ID`)
-            * `trim_table` ↔ `basic_table` (Use `Genmodel_ID`)
-            * `img_table` ↔ other tables (Use `Genmodel_ID`)
-            * `ad_table` ↔ `sales_table` (Use `Genmodel_ID`)
+        * Primary join fields: `Genmodel_ID`. Also `Maker`/`Automaker` and `Genmodel` where available. Use standard SQL JOIN syntax (`INNER JOIN`, `LEFT JOIN`, etc.).
 
-        **3. Query Best Practices:**
-        * **Single Statement ONLY:** Re-iterating the critical rule - generate only one SQL statement.
-        * **Quoted Year Columns:** Always quote year columns from `sales_table` (e.g., `"2015"`).
-        * **Case-Insensitive Filtering:** For string comparisons in `WHERE` clauses (e.g., on `Maker`, `Automaker`, `Genmodel`, `Color`, `Bodytype`), use the `UPPER()` or `LOWER()` function on both the column and the literal value to ensure case-insensitivity. Example: `WHERE UPPER(Maker) = UPPER('Ford')`.
-        * **Table Aliases:** Use table aliases for readability in JOINs (e.g., `FROM ad_table AS ad JOIN basic_table AS b ON ad.Genmodel_ID = b.Genmodel_ID`).
-        * **Valid Columns:** Ensure you are selecting and filtering on columns that actually exist in the specified table(s). Pay attention to `Maker` vs. `Automaker`.
-        * **NULL Handling:** Be mindful of potential NULL values when filtering or aggregating.
-        * **Data Types:** Use `CAST()` when necessary, e.g., `CAST("2020" AS INTEGER)` if you need to treat sales figures numerically.
+        **3. Query Best Practices (SQLite):**
+        * **Single Statement ONLY:** Generate only one SELECT statement.
+        * **Quoted Identifiers:** Only quote table or column names if they contain special characters or spaces (like the year columns in `sales_table`, e.g., `"2018"`). Standard identifiers (`Maker`, `ad_table`) usually don't need quotes.
+        * **Case-Insensitive Filtering:** For string comparisons (`Maker`, `Genmodel`, `Color`), use the `UPPER()` or `LOWER()` function on both the column and the literal value. Example: `WHERE UPPER(Maker) = UPPER('Ford')`. SQLite's `LIKE` is case-insensitive by default for ASCII characters, but using `UPPER`/`LOWER` is safer and clearer.
+        * **Table Aliases:** Use aliases in JOINs (e.g., `FROM ad_table AS ad JOIN basic_table AS b ON ad.Genmodel_ID = b.Genmodel_ID`).
+        * **Valid Columns:** Ensure selected columns exist. Pay attention to `Maker` vs. `Automaker`.
+        * **NULL Handling:** Use `IS NULL` or `IS NOT NULL`.
+        * **Data Types:** Use standard SQL type casting if necessary (e.g., `CAST(some_column AS INTEGER)`).
 
         **4. Handling Potential Data Issues:**
-        * **Model Name Variations:** User input for model names (`Genmodel`) might differ slightly from the stored format (e.g., 'F-150' vs 'F150'). If a query for a specific model on `ad_table` or `sales_table` returns no results, consider verifying the canonical model name in `basic_table` first using a query like `SELECT DISTINCT Genmodel FROM basic_table WHERE UPPER(Automaker) = UPPER('...')`. You may need to inform the user about the discrepancy or ask for clarification if multiple similar models exist. Do *not* run this verification query unless the primary query fails with zero results for a specific model filter.
+        * **Model Name Variations:** User input for model names (`Genmodel`) might differ slightly (e.g., 'F-150' vs 'F150'). If a query returns no results for a specific model, consider verifying the canonical name in `basic_table` using `SELECT DISTINCT Genmodel FROM basic_table WHERE Automaker ILIKE '...'`. Inform the user or ask for clarification if needed. Do *not* run this verification query unless the primary query fails with zero results for a specific model filter.
 
         **5. Execution Workflow:**
-        1.  Analyze the user's question carefully.
-        2.  Identify the necessary table(s) and column(s). Pay attention to `Maker` vs `Automaker`.
-        3.  Generate **ONE single, valid SQL query** following the best practices (case-insensitivity, quoted years, correct columns, etc.).
-        4.  **IMPORTANT:** Use the `execute_sql` tool, passing the generated single SQL query string to it.
-        5.  Analyze the results returned by the `execute_sql` tool (which will be in CSV format or an error message).
-        6.  Formulate a final, natural language, user-friendly answer based *only* on the data returned by the tool. Do not just return the raw CSV or SQL. Summarize findings or present data clearly. If the tool returns an error (e.g., "SQL Execution Error..."), report that error clearly to the user and explain the likely cause if possible (e.g., "I couldn't run the query because..."). If the tool returns an empty result (just headers), state that no data matching the criteria was found.
+        1. Analyze the user's question.
+        2. Identify the necessary table(s) and column(s).
+        3. Generate **ONE single, valid standard SQL query** following best practices.
+        4. Use the `execute_sql` tool, passing the generated SQL query string.
+        5. Analyze the results (CSV data or error message) from the tool.
+        6. Formulate a natural language answer based *only* on the tool's output. Summarize findings or present data clearly. If the tool returns an error (e.g., "SQL Execution Error..."), report it clearly and explain the likely cause. If the tool returns an empty result (just CSV headers), state that no matching data was found.
 
         **Your final output MUST be the natural language answer derived from the executed query results or a clear explanation of why the query failed/returned no data. Do NOT output the SQL query itself unless specifically asked.**
         """

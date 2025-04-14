@@ -1,102 +1,81 @@
-# database.py
+# backend/database.py
 import os
+import sqlite3
 import pandas as pd
-import pandasql as ps
-from google.cloud import storage # Added
-import io # Added
+import io
+import logging
+
+logging.basicConfig(level=logging.INFO)
+
+# --- Configuration ---
+# Determine the absolute path to the directory containing this script
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# Construct the path to the database file relative to this script's location
+DB_FILENAME = "autoquery_data.db"
+DB_FILE_PATH = os.path.join(_BASE_DIR, DB_FILENAME)
+# --- End Configuration ---
 
 class Database:
-    def __init__(self, bucket_name, folder_path):
-        """
-        Initializes the Database by loading CSV tables from Google Cloud Storage.
+    def __init__(self):
+        self.db_path = DB_FILE_PATH
+        logging.info(f"Database object initialized for SQLite file: {self.db_path}")
+        if not os.path.exists(self.db_path):
+             # This might happen during local testing if the DB isn't generated yet,
+             # but should not happen in App Engine if deployment included the file.
+             logging.warning(f"Database file not found at {self.db_path} during init.")
 
-        Args:
-            bucket_name (str): The name of the GCS bucket containing the CSV files.
-            folder_path (str): The folder path within the bucket where CSVs are located (e.g., 'tables_V2.0'). Can be empty if files are in root.
-        """
-        if not bucket_name:
-            raise ValueError("GCS Bucket name is required.")
-
-        self.bucket_name = bucket_name
-        self.folder_path = folder_path.strip('/') # Ensure no leading/trailing slashes for consistency
-        self.storage_client = storage.Client()
-        self.tables = {} # Dictionary to hold loaded tables
-        self.load_tables()
-
-    def _load_single_table(self, table_name_csv):
-        """Loads a single table from GCS."""
+    def _get_connection(self):
+        """Establishes a read-only connection to the SQLite database."""
         try:
-            bucket = self.storage_client.bucket(self.bucket_name)
-            blob_path = f"{self.folder_path}/{table_name_csv}" if self.folder_path else table_name_csv
-            blob = bucket.blob(blob_path)
+            if not os.path.exists(self.db_path):
+                 raise FileNotFoundError(f"SQLite DB file not found: {self.db_path}")
+            # Connect using file path and READ-ONLY mode
+            # uri=True allows using mode=ro parameter
+            conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=10)
+            logging.info(f"Connected to SQLite DB (read-only): {self.db_path}")
+            return conn
+        except sqlite3.Error as e:
+            # Check if error is because file doesn't exist or isn't a DB
+            logging.error(f"Error connecting to SQLite database {self.db_path}: {e}", exc_info=True)
+            raise
 
-            if not blob.exists():
-                 print(f"Warning: Blob '{blob_path}' not found in bucket '{self.bucket_name}'. Skipping table.")
-                 return None
-
-            print(f"Loading {table_name_csv} from gs://{self.bucket_name}/{blob_path}...")
-            # Download content as bytes
-            content_bytes = blob.download_as_bytes()
-            # Read bytes into pandas DataFrame
-            # Using io.BytesIO avoids saving to a temporary file
-            df = pd.read_csv(io.BytesIO(content_bytes), low_memory=False)
-            print(f"{table_name_csv} loaded successfully. Shape: {df.shape}")
-            return df
-        except Exception as e:
-            print(f"Error loading table {table_name_csv} from GCS: {e}")
-            # Depending on requirements, you might want to raise the error
-            # or allow the app to continue without this table.
-            # raise e # Uncomment to make loading failure critical
-            return None # Return None if loading fails
-
-    def load_tables(self):
-        """Loads all required tables from GCS."""
-        print(f"Loading CSV tables from GCS bucket: '{self.bucket_name}', Folder: '{self.folder_path}'")
-        table_files = [
-            'Ad_table.csv', 'Price_table.csv', 'Sales_table.csv',
-            'Basic_table.csv', 'Trim_table.csv', 'Image_table.csv'
-        ]
-        # Dynamically assign to self.xxx_table attributes
-        for csv_file in table_files:
-             # Derive attribute name, e.g., 'Ad_table.csv' -> 'ad_table'
-             attr_name = csv_file.lower().replace('.csv', '')
-             df = self._load_single_table(csv_file)
-             setattr(self, attr_name, df) # Set self.ad_table, self.price_table etc.
-
-        # Optional: Check if essential tables were loaded
-        if getattr(self, 'ad_table', None) is None:
-             print("Critical Error: ad_table failed to load.")
-             # Handle critical failure appropriately - maybe raise exception
-
-        print("Finished loading tables.")
-
-
-    def run_query(self, query):
-        """
-        Executes a SQL query using pandasql on the loaded DataFrames.
-        """
+    def run_query(self, query: str) -> str:
+        """Executes a SQL query against the read-only SQLite database."""
+        logging.info(f"Attempting to execute SQLite query (RO mode): {query[:500]}...")
+        conn = None
         try:
-            # Prepare the environment for pandasql, ensuring only loaded tables are included
-            env = {
-                'ad_table': getattr(self, 'ad_table', None),
-                'price_table': getattr(self, 'price_table', None),
-                'sales_table': getattr(self, 'sales_table', None),
-                'basic_table': getattr(self, 'basic_table', None),
-                'trim_table': getattr(self, 'trim_table', None),
-                'img_table': getattr(self, 'img_table', None),
-                'pd': pd
-            }
-            # Filter out any tables that failed to load (are None)
-            filtered_env = {k: v for k, v in env.items() if v is not None}
+            conn = self._get_connection()
+            # Using pandas read_sql_query still works fine with the connection object
+            result_df = pd.read_sql_query(query, conn)
+            logging.info(f"Query returned {len(result_df)} rows.")
 
-            if not filtered_env:
-                 return "Error: No data tables were loaded successfully."
+            if result_df.empty:
+                # Return headers only for empty results
+                return ",".join(result_df.columns) + "\n" if result_df.columns.tolist() else ""
+            else:
+                csv_buffer = io.StringIO()
+                result_df.to_csv(csv_buffer, index=False)
+                csv_output = csv_buffer.getvalue()
+                return csv_output
 
-            print(f"Executing SQL query: {query}") # Log the query
-            result = ps.sqldf(query, filtered_env)
-            print(f"Query returned {len(result)} rows.") # Log result size
-            return result.to_csv(index=False)
+        except FileNotFoundError as e:
+             logging.error(f"Query failed because DB file was not found: {e}")
+             return f"Error: Database file missing at {self.db_path}."
+        except sqlite3.OperationalError as db_err:
+             # Specific check for write attempts on read-only DB
+             if "attempt to write a readonly database" in str(db_err):
+                 logging.error(f"Write rejected on read-only DB. Query: '{query[:200]}...'", exc_info=False)
+                 return f"Error: Database is read-only ({db_err})"
+             else:
+                 logging.error(f"SQLite Operational Error: {db_err}. Query: '{query[:200]}...'", exc_info=True)
+                 return f"SQL Execution Error: {str(db_err)}"
+        except sqlite3.Error as db_err:
+            logging.error(f"General SQLite Error: {db_err}. Query: '{query[:200]}...'", exc_info=True)
+            return f"SQL Execution Error: {str(db_err)}"
         except Exception as e:
-            # Log the specific error
-            print(f"SQL Execution Error for query '{query}': {str(e)}")
-            return f"SQL Execution Error: {str(e)}"
+            logging.error(f"Unexpected error during query execution: {e}", exc_info=True)
+            return f"Unexpected Error: {str(e)}"
+        finally:
+            if conn:
+                conn.close()
+                logging.info("SQLite connection closed.")
