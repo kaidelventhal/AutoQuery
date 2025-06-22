@@ -1,27 +1,22 @@
 runtime: python312
-service: backend # Or your desired service name
+service: backend 
 entrypoint: gunicorn -b :$PORT -w 2 --threads 4 -k gthread app:app --timeout 120 --log-level info
 
-instance_class: F4 # Use F1 for free tier eligibility, monitor performance/memory
+instance_class: F4
 
 env_variables:
-  GOOGLE_CLOUD_PROJECT: "autoquery-454320" # Needed for Vertex AI client
-  # Add any other non-secret environment variables your app needs
-  # NO database connection vars needed here
+  GOOGLE_CLOUD_PROJECT: "autoquery-454320" 
 
 automatic_scaling:
-  min_instances: 0 # Allows scaling to zero for cost savings
-  max_instances: 2 # Set a reasonable limit for a personal project
+  min_instances: 0
+  max_instances: 2 
   target_cpu_utilization: 0.75
-  # Consider target_concurrent_requests if needed
 
-# Ensure all necessary APIs are enabled in your GCP project (App Engine, Vertex AI)
 
 handlers:
-- url: /.* # Route all traffic to your app
+- url: /.*
   script: auto
-  secure: always # Enforce HTTPS
+  secure: always 
 
-# Add warmup handler if needed (app.py includes a basic one)
 inbound_services:
   - warmup

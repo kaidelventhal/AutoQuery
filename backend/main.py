@@ -1,15 +1,11 @@
 # main.py
 import os
 import logging
-from database import Database # Import the NEW Database class
+from database import Database 
 from agent_tools import set_database_instance
 from agents import create_sql_agent
 from langchain.schema import AIMessage, HumanMessage
 
-# --- FOR LOCAL TESTING ONLY ---
-# Requires setting environment variables for DB connection:
-# GOOGLE_CLOUD_PROJECT, INSTANCE_CONNECTION_NAME, DB_USER, DB_PASS, DB_NAME
-# Recommend running the Cloud SQL Auth Proxy locally for secure connection.
 
 logging.basicConfig(level=logging.INFO)
 
@@ -20,25 +16,22 @@ def main():
     db = None
     agent_executor = None
 
-    # --- Initialize Database Connection ---
     try:
-        db = Database() # Reads env vars internally
+        db = Database() 
         set_database_instance(db)
         print("Database connection pool initialized successfully.")
     except Exception as e:
         print(f"FATAL: Failed to initialize database connection: {e}")
         print("Please check environment variables and Cloud SQL proxy/network.")
-        return # Exit if DB connection fails
+        return
 
-    # --- Initialize Agent ---
     try:
         agent_executor = create_sql_agent()
         print("LangChain Agent created successfully.")
     except Exception as e:
         print(f"FATAL: Failed to create LangChain agent: {e}")
-        return # Exit if agent creation fails
+        return
 
-    # In-memory chat history (list of LangChain message objects).
     chat_history = []
 
     print("\nWelcome to the AutoSQL Chat Interface (Local Cloud SQL Test Mode)!")
@@ -75,10 +68,9 @@ def main():
 
         except Exception as e:
             print(f"\nError during local agent invocation: {e}")
-            logging.error("Local agent invocation error:", exc_info=True) # Log stack trace
+            logging.error("Local agent invocation error:", exc_info=True) 
 
 
-    # Cleanup connections on exit
     if db:
         db.close_connection()
     print("Exiting local test mode.")
