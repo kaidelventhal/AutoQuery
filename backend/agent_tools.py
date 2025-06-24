@@ -20,7 +20,12 @@ class SQLQueryInput(BaseModel):
 
 @tool
 def execute_sql(query: str) -> str:
-
+    """
+    Execute the provided SQL query on the automotive database (SQLite) and return the results as CSV.
+    Use this tool to run SELECT queries against the available tables.
+    Provide the complete standard SQL query as the input string.
+    If an error occurs during execution, this tool will return a string starting with 'SQL Execution Error:'.
+    """
     if db_instance is None:
         return "Error: Database not initialized"
     try:
@@ -91,6 +96,11 @@ def get_table_schema(table_name: str) -> str:
 # --- NEW TOOL: Get Distinct Values ---
 @tool
 def get_distinct_values(table_name: str, column_name: str) -> str:
+    """
+    Returns up to 10 distinct sample values from a specified column in a table.
+    Use this tool ONLY if you need to understand the format or common categories within a specific column before writing your main query.
+    Inputs must be a valid table name and a valid column name for that table.
+    """
     if db_instance is None:
         logging.error("Error: get_distinct_values called but database instance is None.")
         return "Error: Database not initialized."

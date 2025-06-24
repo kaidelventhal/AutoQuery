@@ -42,9 +42,6 @@ def main():
         if user_input.lower() == "exit":
             break
 
-        if db is None or db.pool is None or agent_executor is None:
-            print("Agent: Cannot process query. Database or Agent not ready.")
-            continue
 
         agent_input = {
             "input": user_input,

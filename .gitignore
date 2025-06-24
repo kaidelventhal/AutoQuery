@@ -1,4 +1,3 @@
-# Python
 *.py[cod]
 __pycache__/
 *.env
@@ -11,7 +10,6 @@ wheels/
 *.so
 *.log
 
-# Node
 node_modules/
 npm-debug.log*
 yarn-error.log
@@ -22,20 +20,16 @@ frontend/.env.development.local
 frontend/.env.test.local
 frontend/.env.production.local
 
-# IDE/OS Files
 .vscode/
 .idea/
 *.DS_Store
 Thumbs.db
 
-# Secrets / Sensitive Data
 *.json # Be careful with generic rules, maybe specific key files?
 *.pem
 credentials.json # Example
 /secrets/ # Example directory
 
-# Data files (if large or shouldn't be in git)
 *.csv
 
-# Cloud SDK files
 .gcloud/

@@ -37,6 +37,11 @@ def get_sql_generation_prompt():
             Error ('SQL Execution Error:...'): Analyze the error. If correctable (typo, missing CAST on TEXT price/miles, ambiguous column), generate corrected SQL and call `execute_sql` AGAIN (ONE retry). If successful, answer. If fails again/uncorrectable, report the original error.
         7. FINAL RESPONSE (CRITICAL): Your final output MUST ALWAYS be user-friendly natural language text answering the question based on query results OR clearly stating why the information is unavailable based on the defined schema. ABSOLUTELY NEVER output only the SQL query itself (e.g., ```sql ... ```) as your final answer.
 
+        CRITICAL FINAL OUTPUT FORMATTING RULES:
+        1. Your entire final response MUST be plain text only.
+        2. DO NOT use any Markdown formatting (e.g., no `*` for bullet points, no `**` for bold text, no `#` for headers).
+        3. When providing a list of items, place each item on its own new line.
+        
         ACCURATE Database Schema Overview (SQLite - autoquery_data.db):
 
          `ad_table`: Ad listing details.

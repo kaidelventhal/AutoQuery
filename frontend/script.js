@@ -6,16 +6,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const loadingIndicator = document.getElementById('loading-indicator');
     const errorDisplay = document.getElementById('error-display');
 
-    // --- Configuration ---
-    // IMPORTANT: After deploying the backend service, update this URL!
-    // Get the backend service URL from `gcloud app deploy backend/app.yaml` output
-    // (e.g., https://backend-dot-your-project-id.appspot.com)
-    // and append '/api/chat' to it.
-    const API_URL = 'https://backend-dot-autoquery-454320.uc.r.appspot.com/api/chat'; // <<< UPDATE THIS AFTER BACKEND DEPLOYMENT
-    // Example Deployed URL: const API_URL = 'https://backend-dot-your-project-id.appspot.com/api/chat';
+    const API_URL = 'https://backend-dot-autoquery-new.uc.r.appspot.com/api/chat';
 
-    // In-memory chat history (client-side only for display)
-    // Note: The actual history context for the LLM is managed server-side in app.py
     let chatHistory = [
         { sender: 'agent', message: 'Welcome to AutoQuery AI! How can I help you find vehicle data today?' }
     ];
@@ -95,8 +87,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const data = await response.json();
 
-            // Add agent response to history and re-render
-            chatHistory.push({ sender: 'agent', message: data.response || "Received empty response." });
+            let agentMessage = "";
+            // Check if there is a status report to display
+            if (data.status && data.status.trim() !== "") {
+                agentMessage += "--- Agent Status ---\n";
+                agentMessage += data.status;
+                agentMessage += "--- Final Answer ---\n";
+            }
+            
+            agentMessage += data.final_response || "Received empty response.";
+
+            // Add the combined message to the chat history
+            chatHistory.push({ sender: 'agent', message: agentMessage });
             renderMessages();
 
         } catch (error) {
