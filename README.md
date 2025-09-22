@@ -1,6 +1,6 @@
 # AutoQuery AI
 
-**Live Demo:** [Access the AutoQuery AI Assistant](https://autoquery-new.uc.r.appspot.com/)
+**Live Demo:** [Access the AutoQuery AI Assistant](https://autoquery-472902.ue.r.appspot.com/)
 
 App can take a second to load due to non persistent server. (First request will take longer to load the database into memory and initialize container)
 
@@ -63,7 +63,7 @@ Feel free to experiment with different combinations of makes, models, years, col
     * **API Communication:** Flask-CORS
 * **AI Orchestration:** LangChain (AgentExecutor, Tools, Prompts)
 * **Data Querying:** Pandas, sqlite
-* **Frontend:** HTML, CSS, JavaScript
+* **Frontend:** HTML JavaScript
 
 ## Key Features
 
