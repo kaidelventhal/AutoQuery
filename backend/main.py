@@ -1,4 +1,3 @@
-# main.py
 import os
 import logging
 from database import Database 
@@ -54,11 +53,9 @@ def main():
 
             print("Agent:", agent_output)
 
-            # Update the in-memory chat history.
             chat_history.append(HumanMessage(content=user_input))
             chat_history.append(AIMessage(content=agent_output))
 
-            # Optional: Limit history size locally too
             max_history = 20
             if len(chat_history) > max_history:
                 chat_history = chat_history[-max_history:]

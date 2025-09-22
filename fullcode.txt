@@ -1,0 +1,1146 @@
+README.md:
+<code>
+# AutoQuery AI
+
+**Live Demo:** [Access the AutoQuery AI Assistant](https://autoquery-new.uc.r.appspot.com/)
+
+App can take a second to load due to non persistent server. (First request will take longer to load the database into memory and initialize container)
+
+Try asking the assistant questions about the dataset to see what it can do.
+
+## Project Description
+
+AutoQuery AI is an intelligent vehicle recommendation and query assistant deployed on Google Cloud. It helps users find vehicle information by asking questions in natural language. Leveraging Google Vertex AI's language models and LangChain for orchestration, AutoQuery AI translates user requests Agenticaly into SQL queries executed against a vehicle dataset stored in sqlite3 database
+
+## How It Works
+
+1.  **Frontend Interaction:** Users interact with a simple web interface (HTML/CSS/JavaScript) served by Google App Engine.
+2.  **API Request:** User messages are sent to a backend API built with Flask and deployed as a separate App Engine service.
+3.  **Agent Processing:** The Flask backend uses a LangChain AgentExecutor. This agent is powered by a Google Vertex AI LLM (currently configured with Gemini Flash Lite).
+4.  **Prompting & Schema:** The agent receives the user query along with a detailed system prompt containing:
+    * Instructions on how to behave.
+    * The exact database schema (table names, column names, data types).
+    * Guidance on validating user input against known data (e.g., checking model names).
+5.  **SQL Generation:** Based on the user query and its prompt, the LLM generates a single query.
+6.  **Tool Execution:** The agent invokes a custom LangChain tool (`execute_sql`).
+7.  **Data Querying:**
+    * The execute_sql tool uses the sqlite library.
+    * sqlite runs the generated SQL query against sqlite3 DataFrames.
+    * These DataFrames are loaded into memory by the backend application *on startup* from CSV files stored in a Google Cloud Storage (GCS) bucket.
+8.  **Result Formatting:** The tool returns the query results as a CSV-formatted string (or an error message) back to the agent.
+9.  **Response Generation:** The agent analyzes the tool's output (the CSV data or error) and formulates a final, user-friendly natural language response.
+10. **API Response:** The Flask backend sends the agent's response back to the frontend, which displays it to the user.
+
+## Example Prompts to Try
+
+Here are a few example questions you can ask to test the agent's capabilities:
+
+* **Simple Lookup & Sorting:**
+    * `What was the top selling car in 2015?`
+    * `What car had the largest engine size?`
+    * `Which car has the highest top speed?`
+* **Filtering:**
+    * `Show me red Ford Fiesta cars registered after 2018` (Tests case-insensitivity)
+    * `List BMW cars registered in 2020 with less than 10000 miles`
+    * `Find cars with an automatic gearbox and more than 200 engine power`
+* **Joins / Combining Info (Implicit):**
+    * `What was the entry price for a Ford Focus in 2019?` (Uses `price_table`)
+    * `Show sales data for the Ford F150 in 2016` (Tests model name handling "F150")
+* **Testing Limitations:**
+    * `List the top selling cars for 2018 and 2019` (Agent should state it can only do one year at a time)
+    * `What data do you have for the 'CyberTruck' model?` (Agent should report no data found if it's not in the tables)
+
+Feel free to experiment with different combinations of makes, models, years, colors, features, etc.!
+
+## Tech Stack
+
+* **Cloud Platform:** Google Cloud
+    * **Compute:** App Engine Standard (Python 3.12 Runtime)
+    * **Storage:** Cloud Storage (for CSV data)
+    * **AI:** Vertex AI (Gemini Flash Lite Model)
+* **Backend:**
+    * **Language:** Python
+    * **Framework:** Flask
+    * **Web Server:** Gunicorn (with `gthread` workers)
+    * **API Communication:** Flask-CORS
+* **AI Orchestration:** LangChain (AgentExecutor, Tools, Prompts)
+* **Data Querying:** Pandas, sqlite
+* **Frontend:** HTML, CSS, JavaScript
+
+## Key Features
+
+* **Natural Language Interface**: Ask questions in plain English to query vehicle data.
+* **Agentic SQL Generation**: Converts natural language to sqlite queries using an LLM agent.
+* **Cloud-Native Deployment**: Runs efficiently on Google App Engine, utilizing Cloud Storage for data.
+* **Error Handling**: Agent attempts to identify and report SQL execution errors.
+</code>
+
+backend\agents.py:
+<code>
+from langchain_google_vertexai import ChatVertexAI
+from langchain.agents import AgentExecutor
+from langchain.agents.format_scratchpad.openai_tools import format_to_openai_tool_messages
+from langchain.agents.output_parsers.openai_tools import OpenAIToolsAgentOutputParser
+from prompts import get_sql_generation_prompt
+from langchain.schema import AIMessage, HumanMessage
+from agent_tools import execute_sql, get_table_schema, get_distinct_values
+
+tools = [execute_sql, get_table_schema, get_distinct_values]
+
+def create_sql_agent():
+    """
+    Create and return an agent executor that uses the Gemini model with tool support,
+    including SQL execution and schema/value exploration tools.
+    """
+    llm = ChatVertexAI(
+        model="gemini-2.5-flash", 
+        temperature=0,
+        convert_system_message_to_human=True, 
+        project="autoquery-472902"
+    )
+    llm_with_tools = llm.bind_tools(tools)
+
+    prompt = get_sql_generation_prompt()
+    def input_extractor(x):
+        return x.get("input", x.get("question", ""))
+
+    def scratchpad_formatter(x):
+        return format_to_openai_tool_messages(x.get("intermediate_steps", []))
+
+    agent_components = {
+        "input": input_extractor,
+        "agent_scratchpad": scratchpad_formatter,
+        "chat_history": lambda x: x.get("chat_history", []) 
+    }
+
+    agent = agent_components | prompt | llm_with_tools | OpenAIToolsAgentOutputParser()
+
+    agent_executor = AgentExecutor(
+        agent=agent,
+        tools=tools, 
+        verbose=True, 
+        handle_parsing_errors=True
+        )
+    return agent_executor
+</code>
+
+backend\agent_tools.py:
+<code>
+from pydantic import BaseModel, Field
+from langchain.agents import tool
+from database import Database 
+import logging
+
+logging.basicConfig(level=logging.INFO) 
+
+db_instance: Database | None = None
+
+VALID_TABLES = ["vehicle_ads", "price_table", "sales_table", "basic_table", "trim_table"]
+
+def set_database_instance(db: Database):
+    global db_instance
+    logging.info(f"Setting database instance in agent_tools: {type(db)}")
+    db_instance = db
+
+class SQLQueryInput(BaseModel):
+    query: str = Field(..., description="The SQL query to execute on the automotive database.")
+
+@tool
+def execute_sql(query: str) -> str:
+    """
+    Execute the provided SQL query on the automotive database (SQLite) and return the results as CSV.
+    Use this tool to run SELECT queries against the available tables.
+    Provide the complete standard SQL query as the input string.
+    If an error occurs during execution, this tool will return a string starting with 'SQL Execution Error:'.
+    """
+    if db_instance is None:
+        return "Error: Database not initialized"
+    try:
+        if not query.strip().upper().startswith("SELECT") and not query.strip().upper().startswith("PRAGMA"):
+             logging.warning(f"Rejected non-SELECT/PRAGMA query: {query[:100]}")
+             return f"SQL Execution Error: Only SELECT or PRAGMA queries are allowed. Failed Query: {query}"
+
+        result_or_error = db_instance.run_query(query)
+
+        if isinstance(result_or_error, str) and result_or_error.startswith("Error:"):
+             logging.warning(f"SQL execution failed. Error passed back to agent: {result_or_error}")
+             return f"SQL Execution Error: {result_or_error.replace('Error: ', '')}. Failed Query: {query}"
+
+        elif isinstance(result_or_error, str):
+            max_length = 5000 
+            if len(result_or_error) > max_length:
+                truncated_msg = "\n... (results truncated)"
+                header_end = result_or_error.find('\n')
+                if header_end != -1:
+                    header = result_or_error[:header_end+1]
+                    return header + result_or_error[header_end+1:max_length - len(truncated_msg) - len(header)] + truncated_msg
+                else:
+                    return result_or_error[:max_length - len(truncated_msg)] + truncated_msg
+            return result_or_error 
+        else:
+             logging.error(f"run_query returned unexpected type: {type(result_or_error)}")
+             return f"SQL Execution Error: Unexpected return type from database query execution. Failed Query: {query}"
+
+    except Exception as e:
+        logging.error(f"Unexpected error within execute_sql tool: {e}", exc_info=True)
+        return f"SQL Execution Error: Unexpected tool error: {str(e)}. Failed Query: {query}"
+
+@tool
+def get_table_schema(table_name: str) -> str:
+    """
+    Returns the schema (column names and data types) for the specified table.
+    Use this tool ONLY if you are unsure about the exact columns or data types available in a specific table.
+    Input must be one of the valid table names: ad_table, price_table, sales_table, basic_table, trim_table, img_table.
+    """
+    logging.info(f"Executing get_table_schema tool for table: {table_name}")
+    if db_instance is None:
+        logging.error("Error: get_table_schema called but database instance is None.")
+        return "Error: Database not initialized."
+
+    if table_name not in VALID_TABLES:
+         logging.warning(f"Invalid table name requested for schema: {table_name}")
+         return f"Error: Invalid table name '{table_name}'. Valid tables are: {', '.join(VALID_TABLES)}"
+
+    try:
+        query = f"PRAGMA table_info('{table_name}');" 
+        logging.info(f"Executing schema query: {query}")
+        schema_info = db_instance.run_query(query)
+
+        if isinstance(schema_info, str) and schema_info.startswith("Error:"):
+             logging.warning(f"Schema query failed for {table_name}: {schema_info}")
+             return f"Schema Fetch Error: {schema_info.replace('Error: ', '')}. Failed Query: {query}"
+        elif isinstance(schema_info, str):
+             return f"Schema for table '{table_name}':\n{schema_info}"
+        else:
+            logging.error(f"Schema query for {table_name} returned unexpected type: {type(schema_info)}")
+            return f"Schema Fetch Error: Unexpected return type. Failed Query: {query}"
+
+    except Exception as e:
+        logging.error(f"Error in get_table_schema tool for {table_name}: {e}", exc_info=True)
+        return f"Schema Fetch Error: Unexpected tool error: {str(e)}"
+
+@tool
+def get_distinct_values(table_name: str, column_name: str) -> str:
+    """
+    Returns up to 10 distinct sample values from a specified column in a table.
+    Use this tool ONLY if you need to understand the format or common categories within a specific column before writing your main query.
+    Inputs must be a valid table name and a valid column name for that table.
+    """
+    if db_instance is None:
+        logging.error("Error: get_distinct_values called but database instance is None.")
+        return "Error: Database not initialized."
+
+    if table_name not in VALID_TABLES:
+         logging.warning(f"Invalid table name requested for distinct values: {table_name}")
+         return f"Error: Invalid table name '{table_name}'. Valid tables are: {', '.join(VALID_TABLES)}"
+
+
+    if not column_name.isalnum() and '_' not in column_name:
+         logging.warning(f"Potentially unsafe column name requested for distinct values: {column_name}")
+         if not (column_name.startswith('"') and column_name.endswith('"')):
+              return f"Error: Invalid characters in column name '{column_name}'."
+
+
+    try:
+        query = f'SELECT DISTINCT "{column_name}" FROM "{table_name}" WHERE "{column_name}" IS NOT NULL AND "{column_name}" != "" LIMIT 10;'
+        logging.info(f"Executing distinct values query: {query}")
+        distinct_values = db_instance.run_query(query)
+
+        if isinstance(distinct_values, str) and distinct_values.startswith("Error:"):
+             logging.warning(f"Distinct values query failed for {table_name}.{column_name}: {distinct_values}")
+             return f"Distinct Values Error: {distinct_values.replace('Error: ', '')}. Failed Query: {query}"
+        elif isinstance(distinct_values, str):
+             if distinct_values.strip() == column_name or distinct_values.strip() == f'"{column_name}"':
+                  return f"Distinct values sample for '{column_name}' in '{table_name}':\n(No non-empty values found)"
+             return f"Distinct values sample for '{column_name}' in '{table_name}':\n{distinct_values}"
+        else:
+             logging.error(f"Distinct values query for {table_name}.{column_name} returned unexpected type: {type(distinct_values)}")
+             return f"Distinct Values Error: Unexpected return type. Failed Query: {query}"
+
+    except Exception as e:
+        logging.error(f"Error in get_distinct_values tool for {table_name}.{column_name}: {e}", exc_info=True)
+        return f"Distinct Values Error: Unexpected tool error: {str(e)}"
+</code>
+
+backend\app.py:
+<code>
+
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+from agents import create_sql_agent
+from agent_tools import set_database_instance
+from database import Database
+from langchain.schema import AIMessage, HumanMessage
+import os
+import logging
+import signal
+import sys
+
+logging.basicConfig(level=logging.INFO)
+
+db = None
+try:
+    db = Database()
+    set_database_instance(db)
+    logging.info("Database object initialized for SQLite file.")
+except Exception as e:
+    logging.error(f"FATAL: Failed to initialize Database object: {e}", exc_info=True)
+    db = None
+    set_database_instance(None)
+
+agent_executor = None
+if db: 
+    try:
+        agent_executor = create_sql_agent()
+        logging.info("LangChain Agent created successfully.")
+    except Exception as e:
+        logging.error(f"FATAL: Failed to create LangChain agent: {e}", exc_info=True)
+        agent_executor = None
+else:
+    logging.warning("Database object initialization failed, skipping agent creation.")
+
+chat_history = []
+app = Flask(__name__)
+CORS(app, resources={r"/api/*": {"origins": "*"}})
+
+
+
+@app.route('/api/chat', methods=['POST', 'OPTIONS'])
+def chat():
+    if request.method == 'OPTIONS':
+        response = app.make_default_options_response()
+        headers = response.headers
+        headers['Access-Control-Allow-Origin'] = '*'
+        headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
+        headers['Access-Control-Allow-Headers'] = 'Content-Type'
+        return response
+
+    data = request.get_json()
+    user_message = data.get("message", "").strip()
+
+    if not user_message:
+        logging.warning("Received empty chat request.")
+        return jsonify({"error": "Message cannot be empty."}), 400
+
+    result = agent_executor.invoke({"input": user_message, "chat_history": chat_history})
+
+    final_response = result.get("output", "Agent did not return an output.")
+
+    status_report = ""
+    if "intermediate_steps" in result:
+        for action, observation in result["intermediate_steps"]:
+            status_report += f"Tool Used: {action.tool}\n"
+            tool_input_str = str(action.tool_input).replace('\n', ' ')
+            status_report += f"Tool Input: {tool_input_str}\n\n"
+
+    response_payload = {
+        "status": status_report,
+        "final_response": final_response
+    }
+
+    chat_history.append(HumanMessage(content=user_message))
+    chat_history.append(AIMessage(content=final_response))
+
+    return jsonify(response_payload)
+
+@app.route('/_ah/warmup')
+def warmup():
+    logging.info("Warmup request received.")
+    if db is None:
+         logging.warning("Warmup: Database object not initialized.")
+
+    return '', 200, {}
+
+@app.route('/healthz')
+def healthz():
+     if db: 
+         try:
+              conn = db._get_connection()
+              conn.close()
+              return "OK", 200
+         except Exception as e:
+              logging.error(f"Health check DB connection failed: {e}")
+              return "Service Unavailable (DB connection failed)", 503
+     else:
+          return "Service Unavailable (DB init failed)", 503
+
+def cleanup(signum, frame):
+    logging.info("Received shutdown signal. Cleaning up...")
+    logging.info("Cleanup complete (no persistent DB pool to close). Exiting.")
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, cleanup)
+signal.signal(signal.SIGINT, cleanup)
+
+if __name__ == '__main__':
+    logging.warning("Running Flask development server (for local testing only).")
+    if db:
+         logging.info(f"Local testing with DB path: {db.db_path}")
+    else:
+         logging.error("DB object not created for local testing.")
+    app.run(debug=False, port=int(os.environ.get('PORT', 8080)), host='0.0.0.0')
+</code>
+
+backend\app.yaml:
+<code>
+# backend/app.yaml
+runtime: python312
+service: backend 
+entrypoint: gunicorn -b :$PORT -w 2 --threads 4 -k gthread app:app --timeout 120 --log-level info
+
+instance_class: F4
+
+env_variables:
+  GOOGLE_CLOUD_PROJECT: "autoquery-472902" 
+
+automatic_scaling:
+  min_instances: 0
+  max_instances: 3 
+  target_cpu_utilization: 0.75
+
+
+handlers:
+- url: /.*
+  script: auto
+  secure: always 
+
+inbound_services:
+  - warmup
+</code>
+
+backend\create_database.py:
+<code>
+import pandas as pd
+import sqlite3
+import os
+import logging
+
+DATA_DIR = os.path.join(os.path.dirname(__file__), 'tables_V2.0')
+DB_PATH = os.path.join(os.path.dirname(__file__), 'autoquery_data.db')
+
+TABLE_MAPPING = {
+    os.path.join(DATA_DIR, "Basic_table.csv"): "basic_table",
+    os.path.join(DATA_DIR, "Price_table.csv"): "price_table",
+    os.path.join(DATA_DIR, "Sales_table.csv"): "sales_table",
+    os.path.join(DATA_DIR, "Trim_table.csv"): "trim_table",
+    os.path.join(DATA_DIR, "vehicle_ads.csv"): "vehicle_ads"
+}
+
+def create_db_and_get_schema():
+    if os.path.exists(DB_PATH):
+        logging.info(f"Database file '{DB_PATH}' already exists. Deleting it to rebuild.")
+        os.remove(DB_PATH)
+
+    all_tables_created = []
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        logging.info(f"Successfully created SQLite database at '{DB_PATH}'")
+
+        for csv_path, table_name in TABLE_MAPPING.items():
+            if os.path.exists(csv_path):
+                logging.info(f"Reading '{os.path.basename(csv_path)}'...")
+                df = pd.read_csv(csv_path)
+                df.columns = df.columns.str.strip()
+
+                if table_name == "sales_table":
+                    for col in df.columns:
+                        if col.isdigit():
+                            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
+
+                df.to_sql(table_name, conn, if_exists='replace', index=False)
+                all_tables_created.append(table_name)
+                logging.info(f"Successfully created table '{table_name}'.")
+            else:
+                logging.warning(f"CSV file not found, skipping: '{csv_path}'")
+
+        print("\n" + "="*50)
+        print("DATABASE SCHEMA FOR PROMPTS.PY")
+        print("="*50 + "\n")
+
+        for table_name in sorted(all_tables_created):
+            print(f"        `{table_name}`: Description of the table.")
+            df = pd.read_sql_query(f"SELECT * FROM {table_name} LIMIT 1", conn)
+            schema = pd.io.sql.get_schema(df, table_name)
+            columns = [line.strip().split(" ") for line in schema.split('\n') if "CREATE TABLE" not in line and ")" not in line and line.strip() != ""]
+            for col_info in columns:
+                col_name = col_info[0].replace('"', '')
+                col_type = col_info[1]
+                print(f"            `{col_name}` ({col_type})")
+            print("")
+
+        conn.close()
+        logging.info("Database creation complete and connection closed.")
+
+    except Exception as e:
+        logging.error(f"An error occurred during database creation: {e}", exc_info=True)
+
+if __name__ == "__main__":
+    create_db_and_get_schema()
+</code>
+
+backend\database.py:
+<code>
+import os
+import sqlite3
+import pandas as pd
+import io
+import logging
+
+logging.basicConfig(level=logging.INFO)
+
+
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_FILENAME = "autoquery_data.db"
+DB_FILE_PATH = os.path.join(_BASE_DIR, DB_FILENAME)
+
+class Database:
+    def __init__(self):
+        self.db_path = DB_FILE_PATH
+        logging.info(f"Database object initialized for SQLite file: {self.db_path}")
+        if not os.path.exists(self.db_path):
+             
+             logging.warning(f"Database file not found at {self.db_path} during init.")
+
+    def _get_connection(self):
+        """Establishes a read-only connection to the SQLite database."""
+        try:
+            if not os.path.exists(self.db_path):
+                 raise FileNotFoundError(f"SQLite DB file not found: {self.db_path}")
+           
+            conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=10)
+            logging.info(f"Connected to SQLite DB (read-only): {self.db_path}")
+            return conn
+        except sqlite3.Error as e:
+            logging.error(f"Error connecting to SQLite database {self.db_path}: {e}", exc_info=True)
+            raise
+
+    def run_query(self, query: str) -> str:
+        """Executes a SQL query against the read-only SQLite database."""
+        logging.info(f"Attempting to execute SQLite query (RO mode): {query[:500]}...")
+        conn = None
+        try:
+            conn = self._get_connection()
+            result_df = pd.read_sql_query(query, conn)
+            logging.info(f"Query returned {len(result_df)} rows.")
+
+            if result_df.empty:
+                return ",".join(result_df.columns) + "\n" if result_df.columns.tolist() else ""
+            else:
+                csv_buffer = io.StringIO()
+                result_df.to_csv(csv_buffer, index=False)
+                csv_output = csv_buffer.getvalue()
+                return csv_output
+        finally:
+            if conn:
+                conn.close()
+                logging.info("SQLite connection closed.")
+</code>
+
+backend\main.py:
+<code>
+import os
+import logging
+from database import Database 
+from agent_tools import set_database_instance
+from agents import create_sql_agent
+from langchain.schema import AIMessage, HumanMessage
+
+
+logging.basicConfig(level=logging.INFO)
+
+def main():
+    print("--- Running Local Test Mode (Connecting to Cloud SQL) ---")
+    print("Ensure DB environment variables are set and Cloud SQL Auth Proxy is running (recommended).")
+
+    db = None
+    agent_executor = None
+
+    try:
+        db = Database() 
+        set_database_instance(db)
+        print("Database connection pool initialized successfully.")
+    except Exception as e:
+        print(f"FATAL: Failed to initialize database connection: {e}")
+        print("Please check environment variables and Cloud SQL proxy/network.")
+        return
+
+    try:
+        agent_executor = create_sql_agent()
+        print("LangChain Agent created successfully.")
+    except Exception as e:
+        print(f"FATAL: Failed to create LangChain agent: {e}")
+        return
+
+    chat_history = []
+
+    print("\nWelcome to the AutoSQL Chat Interface (Local Cloud SQL Test Mode)!")
+    print("Enter your natural language queries (type 'exit' to quit).")
+
+    while True:
+        user_input = input("You: ").strip()
+        if user_input.lower() == "exit":
+            break
+
+
+        agent_input = {
+            "input": user_input,
+            "chat_history": chat_history,
+        }
+
+        try:
+            result = agent_executor.invoke(agent_input)
+            agent_output = result.get("output", "No output returned.")
+
+            print("Agent:", agent_output)
+
+            chat_history.append(HumanMessage(content=user_input))
+            chat_history.append(AIMessage(content=agent_output))
+
+            max_history = 20
+            if len(chat_history) > max_history:
+                chat_history = chat_history[-max_history:]
+
+        except Exception as e:
+            print(f"\nError during local agent invocation: {e}")
+            logging.error("Local agent invocation error:", exc_info=True) 
+
+
+    if db:
+        db.close_connection()
+    print("Exiting local test mode.")
+
+if __name__ == "__main__":
+    main()
+</code>
+
+backend\prompts.py:
+<code>
+from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
+
+def get_sql_generation_prompt():
+    system_message = """
+        You are AutoQuery AI, an expert AI assistant specialized in querying an automotive SQLite database with the exact schema defined below.
+        Your primary goal is to answer user questions accurately and usefully by generating AND executing SQL queries using the available tools.
+        Apply ALL relevant constraints from the user's query. Only use columns that actually exist in the schema.
+
+        Available Tools:
+        1.  `execute_sql`: Executes a standard SQLite SELECT or PRAGMA query. Use this for your main data retrieval. Returns data as CSV or an error message.
+        2.  `get_table_schema`: Input: `table_name`. Returns the schema (columns, types) for that table. Use this ONLY if you need to double-check column names/types for a specific table BEFORE generating your main SQL query.
+        3.  `get_distinct_values`: Input: `table_name`, `column_name`. Returns sample distinct values from a column. Use this ONLY if you need to see example data BEFORE generating your main SQL query.
+
+        CRITICAL RULE: You MUST generate only ONE single valid SQL statement per request to the `execute_sql` tool. Only `SELECT` or `PRAGMA` statements are allowed.
+
+        Execution Workflow & Error Handling:
+        1. Analyze: Analyze the user's question carefully. Identify ALL constraints, required data, and map them to the ACTUAL columns available in the schema below. If the user asks about data that is clearly not in the schema (e.g., depreciation, specific reliability ratings, features not listed), state clearly that the information is unavailable.
+        2. Explore (Optional): If needed, use `get_table_schema` or `get_distinct_values` ONCE to clarify column names/types or value formats based on the real schema.
+        3. MANDATORY Pre-computation Check (Internal Thought Step - Do Not Output): Before generating SQL, confirm:
+              Tables & Join Plan: Which tables are needed based on AVAILABLE columns? The primary join key is `Genmodel_ID`.
+              Filtering Columns: Which EXISTING columns need filtering?
+              CAST Needed?: The `vehicle_ads` table has proper numeric types (INTEGER/REAL). No CASTING or REPLACE is needed for Price, Runned_Miles, Engin_size, etc., in that table. All numeric columns can be used directly for comparisons and calculations.
+              UPPER() Needed?: Which string comparisons require `UPPER()`? (Answer: All - `Automaker`, `Genmodel`, `Color`, `Bodytype`, `Fuel_type`, `Gearbox`, etc.).
+              Automaker JOIN?: Is filtering by manufacturer needed? (If yes, MANDATORY JOIN with `basic_table` on `Genmodel_ID`, filter on `basic_table.Automaker`).
+              DISTINCT Needed?: Is a list of unique items/cars requested?
+              Grouping/Aggregation?: Is `GROUP BY`, `COUNT`, `AVG`, `SUM` needed on EXISTING columns?
+        4. Formulate SQL: Generate ONE single, valid standard SQL query for `execute_sql`, using ONLY columns that exist in the schema. Follow all SQL best practices. Ensure all user constraints are included.
+        5. Execute SQL: Call `execute_sql`.
+        6. Analyze `execute_sql` Result:
+           Success (CSV Data): Formulate a user-friendly natural language answer based only on the returned data.
+             Use DISTINCT: Ensure query used `SELECT DISTINCT` if appropriate.
+             Summarize Large DISTINCT Lists: If `SELECT DISTINCT` returned > 20 rows, list the first 5-10 diverse examples and state that more results were found (e.g., "Found 190 distinct models including: Model A, Model B... (and 180 others).").
+             Include Calculated Values: Include aggregate values (`SUM`, `AVG`, `COUNT`) clearly in the response.
+             General Formatting: Use Markdown lists for multiple items.
+             Empty Results: If zero rows returned, state that no matching data was found for the specified criteria.
+           Error ('SQL Execution Error:...'): Analyze the error. If correctable (typo, ambiguous column), generate corrected SQL and call `execute_sql` AGAIN (ONE retry). If successful, answer. If it fails again or is uncorrectable, report the original error.
+        7. FINAL RESPONSE (CRITICAL): Your final output MUST ALWAYS be user-friendly natural language text answering the question based on query results OR clearly stating why the information is unavailable based on the defined schema. ABSOLUTELY NEVER output only the SQL query itself (e.g., ```sql ... ```) as your final answer.
+
+        CRITICAL FINAL OUTPUT FORMATTING RULES:
+        1. Your entire final response MUST be plain text only.
+        2. DO NOT use any Markdown formatting (e.g., no `*` for bullet points, no `**` for bold text, no `#` for headers).
+        3. When providing a list of items, place each item on its own new line.
+
+        ACCURATE Database Schema Overview (SQLite - autoquery_data.db):
+
+        `basic_table`: Basic mapping of manufacturers to models. Use this table to filter by `Automaker`.
+            `Automaker` (TEXT)
+            `Automaker_ID` (INTEGER)
+            `Genmodel` (TEXT)
+            `Genmodel_ID` (TEXT)
+
+        `price_table`: Contains the manufacturer's suggested retail price (entry price) by model and year.
+            `Maker` (TEXT)
+            `Genmodel` (TEXT)
+            `Genmodel_ID` (TEXT)
+            `Year` (INTEGER)
+            `Entry_price` (INTEGER)
+
+        `sales_table`: Contains annual sales figures for each model. Column names are years (e.g., "2020").
+            `Maker` (TEXT)
+            `Genmodel` (TEXT)
+            `Genmodel_ID` (TEXT)
+            `2020` (INTEGER)
+            `2019` (INTEGER)
+            `2018` (INTEGER)
+            `2017` (INTEGER)
+            `2016` (INTEGER)
+            `2015` (INTEGER)
+            `2014` (INTEGER)
+            `2013` (INTEGER)
+            `2012` (INTEGER)
+            `2011` (INTEGER)
+            `2010` (INTEGER)
+            `2009` (INTEGER)
+            `2008` (INTEGER)
+            `2007` (INTEGER)
+            `2006` (INTEGER)
+            `2005` (INTEGER)
+            `2004` (INTEGER)
+            `2003` (INTEGER)
+            `2002` (INTEGER)
+            `2001` (INTEGER)
+
+        `trim_table`: Contains details for specific trim levels of a model.
+            `Genmodel_ID` (TEXT)
+            `Maker` (TEXT)
+            `Genmodel` (TEXT)
+            `Trim` (TEXT)
+            `Year` (INTEGER)
+            `Price` (INTEGER)
+            `Gas_emission` (INTEGER)
+            `Fuel_type` (TEXT)
+            `Engine_size` (INTEGER)
+
+        `vehicle_ads`: Contains detailed, cleaned information about individual vehicle sale listings.
+            `Maker` (TEXT)
+            `Genmodel` (TEXT)
+            `Genmodel_ID` (TEXT)
+            `Adv_year` (INTEGER)
+            `Adv_month` (INTEGER)
+            `Color` (TEXT)
+            `Reg_year` (INTEGER)
+            `Bodytype` (TEXT)
+            `Runned_Miles` (INTEGER)
+            `Engin_size` (REAL)
+            `Gearbox` (TEXT)
+            `Fuel_type` (TEXT)
+            `Price` (INTEGER)
+            `Engine_power` (REAL)
+            `Wheelbase` (REAL)
+            `Height` (REAL)
+            `Width` (REAL)
+            `Length` (REAL)
+            `Average_mpg` (REAL)
+            `Top_speed` (REAL)
+            `Seat_num` (INTEGER)
+            `Door_num` (INTEGER)
+
+        Query Best Practices & Specific Guidance (SQLite):
+          Use Existing Columns Only: Do not attempt to query columns not listed in the schema above.
+          Use DISTINCT: Use `SELECT DISTINCT` when asked for unique values, items, models, or car listings.
+          Maker/Automaker Filtering (CRITICAL): ALWAYS use `Automaker` from `basic_table` for manufacturer filters. You MUST JOIN `basic_table` with another table using `Genmodel_ID`.
+          Case-Insensitive Filtering (CRITICAL): ALWAYS use `UPPER()` on both the column and the value for ALL string comparisons in WHERE clauses (e.g., `WHERE UPPER(Color) = UPPER('Blue')`).
+          Ambiguous Columns: Always qualify columns with the table name or alias in `SELECT` and `WHERE` clauses when performing a JOIN (e.g., `vehicle_ads.Price`, `trim_table.Price`).
+          Body Types: If a user asks for 'Station wagon', you should query for 'Estate' (e.g., `WHERE UPPER(Bodytype) = UPPER('Estate')`).
+          Numeric Columns are Clean: All columns in the `vehicle_ads` table with numeric types (INTEGER, REAL) are cleaned. You do NOT need to use `CAST` or `REPLACE` for sorting, comparison, or aggregation. You can use them directly (e.g., `WHERE Price > 20000`).
+          Sales Years (`sales_table`): The columns for years ("2001" to "2020") are INTEGERs. You MUST use double quotes for these column names in your queries (e.g., `SELECT "2015", "2016" FROM sales_table`).
+          Finding Most Common: Use `SELECT column_name, COUNT(*) as count FROM table_name WHERE column_name IS NOT NULL AND column_name != '' GROUP BY column_name ORDER BY count DESC LIMIT 1;`.
+          Top N Results: Use `LIMIT N`, combined with `ORDER BY` and `DISTINCT` where appropriate.
+    """
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", system_message),
+        MessagesPlaceholder(variable_name="chat_history"),
+        ("user", "{input}"),
+        MessagesPlaceholder(variable_name="agent_scratchpad")
+    ])
+    return prompt
+</code>
+
+frontend\app.yaml:
+<code>
+runtime: python312
+
+service: default 
+
+
+handlers:
+  - url: /style\.css
+    static_files: style.css 
+    upload: style\.css      
+
+  - url: /script\.js
+    static_files: script.js
+    upload: script\.js
+
+  - url: /.*
+    static_files: index.html
+    upload: index\.html
+
+</code>
+
+frontend\index.html:
+<code>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AutoQuery AI</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>AutoQuery AI</h1>
+            <h2>Vehicle Data Query Assistant built by Kai Delventhal</h2>
+        </header>
+
+        <div class="chat-window">
+            <ul id="message-list">
+                <!-- Messages will be added here by JavaScript -->
+            </ul>
+        </div>
+
+        <div id="loading-indicator" class="loading" style="display: none;">
+            <span>Agent thinking...</span>
+        </div>
+
+         <div id="error-display" class="error-message" style="display: none;">
+             <!-- Errors will be shown here -->
+         </div>
+
+        <form id="chat-form" class="chat-input-area">
+            <input type="text" id="message-input" placeholder="Ask about vehicle data..." required autocomplete="off">
+            <button type="submit" id="send-button">Send</button>
+        </form>
+
+        <footer>
+            <p>Powered by Google Vertex AI & LangChain</p>
+        </footer>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
+</code>
+
+frontend\script.js:
+<code>
+document.addEventListener('DOMContentLoaded', () => {
+    const messageList = document.getElementById('message-list');
+    const chatForm = document.getElementById('chat-form');
+    const messageInput = document.getElementById('message-input');
+    const sendButton = document.getElementById('send-button');
+    const loadingIndicator = document.getElementById('loading-indicator');
+    const errorDisplay = document.getElementById('error-display');
+
+const API_URL = 'https://backend-dot-autoquery-472902.ue.r.appspot.com/api/chat';
+
+
+
+
+
+
+    let chatHistory = [
+        { sender: 'agent', message: 'Welcome to AutoQuery AI! How can I help you find vehicle data today?' }
+    ];
+
+    // --- Functions ---
+
+    /** Renders messages from chatHistory to the DOM */
+    function renderMessages() {
+        messageList.innerHTML = ''; // Clear existing messages
+        chatHistory.forEach(msg => {
+            const listItem = document.createElement('li');
+            listItem.classList.add('message');
+            listItem.classList.add(msg.sender === 'user' ? 'user-message' : 'agent-message');
+
+            // Sanitize output - Use textContent to prevent XSS
+            listItem.textContent = msg.message;
+
+            messageList.appendChild(listItem);
+        });
+        // Scroll to the bottom
+        // Use setTimeout to allow the DOM to update before scrolling
+        setTimeout(() => {
+             messageList.scrollTop = messageList.scrollHeight;
+        }, 0);
+    }
+
+    /** Displays error messages */
+    function displayError(errorMessage) {
+        errorDisplay.textContent = `Error: ${errorMessage}`;
+        errorDisplay.style.display = 'block';
+        loadingIndicator.style.display = 'none'; // Hide loading if error occurs
+    }
+
+    /** Hides the error display */
+    function clearError() {
+        errorDisplay.textContent = '';
+        errorDisplay.style.display = 'none';
+    }
+
+    /** Sends message to backend API */
+    async function sendMessageToApi(userMessage) {
+        loadingIndicator.style.display = 'block';
+        clearError();
+        setInteractionState(true); // Disable input
+
+        // Add user message to display history immediately
+        chatHistory.push({ sender: 'user', message: userMessage });
+        renderMessages();
+        messageInput.value = ''; // Clear input field
+
+
+        // Note: We are NOT sending the client-side history here.
+        // The backend maintains its own history per instance.
+        // If you needed persistent history across requests, the backend
+        // would need to load/save it, and the API call might include a session ID.
+        try {
+            const response = await fetch(API_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    message: userMessage,
+                    // Not sending history from client: history: historyForApi,
+                }),
+            });
+
+            if (!response.ok) {
+                let errorMsg = `Request failed (${response.status})`;
+                try {
+                    // Try to get more specific error from backend response
+                    const errorData = await response.json();
+                    errorMsg = errorData.error || errorMsg;
+                } catch (e) { /* Ignore if no JSON body or parsing error */ }
+                throw new Error(errorMsg);
+            }
+
+            const data = await response.json();
+
+            let agentMessage = "";
+            // Check if there is a status report to display
+            if (data.status && data.status.trim() !== "") {
+                agentMessage += "--- Agent Status ---\n";
+                agentMessage += data.status;
+                agentMessage += "--- Final Answer ---\n";
+            }
+            
+            agentMessage += data.final_response || "Received empty response.";
+
+            // Add the combined message to the chat history
+            chatHistory.push({ sender: 'agent', message: agentMessage });
+            renderMessages();
+
+        } catch (error) {
+            console.error('API Error:', error);
+            displayError(error.message || 'Could not connect to the agent.');
+            // Optional: Remove the user's message from display if API call failed?
+            // chatHistory.pop(); // Removes the last added message (the user's)
+            // renderMessages();
+        } finally {
+            loadingIndicator.style.display = 'none';
+            setInteractionState(false); // Re-enable input
+        }
+    }
+
+    /** Enables/Disables input field and send button */
+    function setInteractionState(disabled) {
+        messageInput.disabled = disabled;
+        sendButton.disabled = disabled;
+        // Optionally change styles for disabled state
+        messageInput.style.cursor = disabled ? 'not-allowed' : '';
+        sendButton.style.cursor = disabled ? 'not-allowed' : 'pointer';
+    }
+
+
+    // --- Event Listeners ---
+
+    chatForm.addEventListener('submit', (event) => {
+        event.preventDefault(); // Prevent page reload
+        const userMessage = messageInput.value.trim();
+
+        if (userMessage && !sendButton.disabled) { // Check if input is not disabled
+            // Send message to backend (which also handles rendering user message)
+            sendMessageToApi(userMessage);
+        }
+    });
+
+    // --- Initial Render ---
+    renderMessages();
+
+}); // End DOMContentLoaded
+</code>
+
+frontend\style.css:
+<code>
+body {
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+    background-color: #1a1d21; /* Dark background */
+    color: #e0e0e0; /* Light text */
+    margin: 0;
+    padding: 0;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start; /* Align container to top */
+    min-height: 100vh;
+    padding-top: 20px; /* Add some space at the top */
+}
+
+.container {
+    width: 100%;
+    max-width: 700px; /* Limit width */
+    background-color: #282c34; /* Slightly lighter dark */
+    border-radius: 8px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+}
+
+header {
+    text-align: center;
+    margin-bottom: 15px;
+    border-bottom: 1px solid #444;
+    padding-bottom: 15px;
+}
+
+header h1 {
+    margin: 0 0 5px 0;
+    color: #61dafb; /* React-like blue */
+}
+
+header h2 {
+    margin: 0;
+    font-size: 1.1em;
+    font-weight: 400;
+    color: #aaa;
+}
+
+.chat-window {
+    height: 60vh; /* Fixed height for chat */
+    overflow-y: auto; /* Enable scrolling */
+    border: 1px solid #444;
+    border-radius: 5px;
+    margin-bottom: 15px;
+    padding: 10px;
+    background-color: #1e1f22; /* Darker chat background */
+    display: flex; /* Needed for scroll behavior */
+    flex-direction: column; /* Stack messages */
+}
+
+#message-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    flex-grow: 1; /* Allow list to grow */
+}
+
+.message {
+    margin-bottom: 12px;
+    padding: 8px 12px;
+    border-radius: 15px;
+    max-width: 80%;
+    word-wrap: break-word;
+    line-height: 1.4;
+    white-space: pre-wrap;
+}
+
+.user-message {
+    background-color: #007bff; /* Blue for user */
+    color: white;
+    align-self: flex-end; /* Align user messages to right */
+    border-bottom-right-radius: 4px; /* Flatten one corner */
+    margin-left: auto; /* Push to right */
+}
+
+.agent-message {
+    background-color: #495057; /* Gray for agent */
+    color: white;
+    align-self: flex-start; /* Align agent messages to left */
+    border-bottom-left-radius: 4px; /* Flatten one corner */
+    margin-right: auto; /* Push to left */
+}
+
+.agent-message strong, .user-message strong {
+    display: block;
+    font-size: 0.8em;
+    margin-bottom: 4px;
+    opacity: 0.8;
+}
+
+.chat-input-area {
+    display: flex;
+    margin-top: 10px; /* Space above input */
+}
+
+#message-input {
+    flex-grow: 1;
+    padding: 10px;
+    border: 1px solid #555;
+    border-radius: 4px 0 0 4px; /* Combine with button */
+    background-color: #333;
+    color: #eee;
+    font-size: 1em;
+    outline: none; /* Remove default outline */
+}
+#message-input:focus {
+     border-color: #007bff;
+}
+
+
+#send-button {
+    padding: 10px 15px;
+    border: none;
+    background-color: #007bff;
+    color: white;
+    cursor: pointer;
+    border-radius: 0 4px 4px 0; /* Combine with input */
+    font-size: 1em;
+    transition: background-color 0.2s ease;
+}
+
+#send-button:hover {
+    background-color: #0056b3;
+}
+
+#send-button:disabled {
+    background-color: #555;
+    cursor: not-allowed;
+}
+#message-input:disabled {
+     background-color: #444;
+}
+
+.loading, .error-message {
+    text-align: center;
+    padding: 8px;
+    margin-top: 10px;
+    font-style: italic;
+    border-radius: 4px;
+}
+
+.loading {
+    color: #aaa;
+}
+
+.error-message {
+    color: #ff6b6b; /* Red for errors */
+    background-color: #4d2020;
+    border: 1px solid #7a3b3b;
+    font-style: normal;
+    font-weight: bold;
+}
+
+footer {
+    text-align: center;
+    margin-top: 20px;
+    font-size: 0.85em;
+    color: #777;
+    border-top: 1px solid #444;
+    padding-top: 15px;
+}
+</code>
+

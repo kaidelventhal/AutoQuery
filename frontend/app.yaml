@@ -2,6 +2,7 @@ runtime: python312
 
 service: default 
 
+
 handlers:
   - url: /style\.css
     static_files: style.css 

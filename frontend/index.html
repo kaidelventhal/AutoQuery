@@ -10,22 +10,23 @@
     <div class="container">
         <header>
             <h1>AutoQuery AI</h1>
-            <h2>Vehicle Data Query Assistant built by Kai Delventhal</h2>
+            <h2>Vehicle Data Query Assistant</h2>
         </header>
 
         <div class="chat-window">
-            <ul id="message-list">
-                <!-- Messages will be added here by JavaScript -->
-            </ul>
+            <ul id="message-list"></ul>
+        </div>
+
+        <div id="agent-steps-display" class="agent-steps-container" style="display: none;">
+            <h4>Agent's Steps:</h4>
+            <pre><code id="agent-steps-code"></code></pre>
         </div>
 
         <div id="loading-indicator" class="loading" style="display: none;">
             <span>Agent thinking...</span>
         </div>
 
-         <div id="error-display" class="error-message" style="display: none;">
-             <!-- Errors will be shown here -->
-         </div>
+        <div id="error-display" class="error-message" style="display: none;"></div>
 
         <form id="chat-form" class="chat-input-area">
             <input type="text" id="message-input" placeholder="Ask about vehicle data..." required autocomplete="off">
@@ -36,7 +37,6 @@
             <p>Powered by Google Vertex AI & LangChain</p>
         </footer>
     </div>
-
     <script src="script.js"></script>
 </body>
 </html>

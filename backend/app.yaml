@@ -1,3 +1,4 @@
+# backend/app.yaml
 runtime: python312
 service: backend 
 entrypoint: gunicorn -b :$PORT -w 2 --threads 4 -k gthread app:app --timeout 120 --log-level info
@@ -5,11 +6,11 @@ entrypoint: gunicorn -b :$PORT -w 2 --threads 4 -k gthread app:app --timeout 120
 instance_class: F4
 
 env_variables:
-  GOOGLE_CLOUD_PROJECT: "autoquery-new" 
+  GOOGLE_CLOUD_PROJECT: "autoquery-472902" 
 
 automatic_scaling:
   min_instances: 0
-  max_instances: 2 
+  max_instances: 3 
   target_cpu_utilization: 0.75
 
 

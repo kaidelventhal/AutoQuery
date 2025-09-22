@@ -1,4 +1,3 @@
-# backend/prompts.py
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 def get_sql_generation_prompt():
@@ -18,118 +17,117 @@ def get_sql_generation_prompt():
         1. Analyze: Analyze the user's question carefully. Identify ALL constraints, required data, and map them to the ACTUAL columns available in the schema below. If the user asks about data that is clearly not in the schema (e.g., depreciation, specific reliability ratings, features not listed), state clearly that the information is unavailable.
         2. Explore (Optional): If needed, use `get_table_schema` or `get_distinct_values` ONCE to clarify column names/types or value formats based on the real schema.
         3. MANDATORY Pre-computation Check (Internal Thought Step - Do Not Output): Before generating SQL, confirm:
-             Tables & Join Plan: Which tables are needed based on AVAILABLE columns? Join key is `Genmodel_ID`.
-             Filtering Columns: Which EXISTING columns need filtering?
-             CAST Needed?: Which TEXT columns (`ad_table.Price`, `ad_table.Runned_Miles`, `ad_table.Engin_size`) require `CAST` or `REPLACE` for numeric/comparison operations? (Note: Sales years, Entry_price, trim_table.Price/Engine_size are INTEGER - no CAST needed).
-             UPPER() Needed?: Which string comparisons require `UPPER()`? (Answer: All - `Automaker`, `Genmodel`, `Color`, `Bodytype`, `Fuel_type`, `Gearbox`, etc.).
-             Automaker JOIN?: Is filtering by manufacturer needed? (If yes, MANDATORY JOIN with `basic_table` on `Genmodel_ID`, filter on `basic_table.Automaker`).
-             DISTINCT Needed?: Is a list of unique items/cars requested?
-             Grouping/Aggregation?: Is `GROUP BY`, `COUNT`, `AVG`, `SUM` needed on EXISTING columns?
-        4. Formulate SQL: Generate ONE single, valid standard SQL query for `execute_sql`, using ONLY columns that exist in the schema. Follow ALL SQL best practices. Ensure all user constraints are included.
+              Tables & Join Plan: Which tables are needed based on AVAILABLE columns? The primary join key is `Genmodel_ID`.
+              Filtering Columns: Which EXISTING columns need filtering?
+              CAST Needed?: The `vehicle_ads` table has proper numeric types (INTEGER/REAL). No CASTING or REPLACE is needed for Price, Runned_Miles, Engin_size, etc., in that table. All numeric columns can be used directly for comparisons and calculations.
+              UPPER() Needed?: Which string comparisons require `UPPER()`? (Answer: All - `Automaker`, `Genmodel`, `Color`, `Bodytype`, `Fuel_type`, `Gearbox`, etc.).
+              Automaker JOIN?: Is filtering by manufacturer needed? (If yes, MANDATORY JOIN with `basic_table` on `Genmodel_ID`, filter on `basic_table.Automaker`).
+              DISTINCT Needed?: Is a list of unique items/cars requested?
+              Grouping/Aggregation?: Is `GROUP BY`, `COUNT`, `AVG`, `SUM` needed on EXISTING columns?
+        4. Formulate SQL: Generate ONE single, valid standard SQL query for `execute_sql`, using ONLY columns that exist in the schema. Follow all SQL best practices. Ensure all user constraints are included.
         5. Execute SQL: Call `execute_sql`.
         6. Analyze `execute_sql` Result:
-            Success (CSV Data): Formulate a user-friendly natural language answer based only on the returned data.
-              Use DISTINCT: Ensure query used `SELECT DISTINCT` if appropriate.
-              Summarize Large DISTINCT Lists: If `SELECT DISTINCT` returned > 20 rows, list the first 5-10 diverse examples using Markdown bullet points (` item`) and state that more results were found (e.g., "Found 190 distinct models including:\n Model A\n Model B\n... (and 180 others)."). Do NOT just say "I found many...".
-              Include Calculated Values: Include aggregate values (`SUM`, `AVG`, `COUNT`) clearly in the response.
-              General Formatting: Use Markdown lists for multiple items.
-              Empty Results: If zero rows returned, state that no matching data was found for the specified criteria.
-            Error ('SQL Execution Error:...'): Analyze the error. If correctable (typo, missing CAST on TEXT price/miles, ambiguous column), generate corrected SQL and call `execute_sql` AGAIN (ONE retry). If successful, answer. If fails again/uncorrectable, report the original error.
+           Success (CSV Data): Formulate a user-friendly natural language answer based only on the returned data.
+             Use DISTINCT: Ensure query used `SELECT DISTINCT` if appropriate.
+             Summarize Large DISTINCT Lists: If `SELECT DISTINCT` returned > 20 rows, list the first 5-10 diverse examples and state that more results were found (e.g., "Found 190 distinct models including: Model A, Model B... (and 180 others).").
+             Include Calculated Values: Include aggregate values (`SUM`, `AVG`, `COUNT`) clearly in the response.
+             General Formatting: Use Markdown lists for multiple items.
+             Empty Results: If zero rows returned, state that no matching data was found for the specified criteria.
+           Error ('SQL Execution Error:...'): Analyze the error. If correctable (typo, ambiguous column), generate corrected SQL and call `execute_sql` AGAIN (ONE retry). If successful, answer. If it fails again or is uncorrectable, report the original error.
         7. FINAL RESPONSE (CRITICAL): Your final output MUST ALWAYS be user-friendly natural language text answering the question based on query results OR clearly stating why the information is unavailable based on the defined schema. ABSOLUTELY NEVER output only the SQL query itself (e.g., ```sql ... ```) as your final answer.
 
         CRITICAL FINAL OUTPUT FORMATTING RULES:
         1. Your entire final response MUST be plain text only.
         2. DO NOT use any Markdown formatting (e.g., no `*` for bullet points, no `**` for bold text, no `#` for headers).
         3. When providing a list of items, place each item on its own new line.
-        
+
         ACCURATE Database Schema Overview (SQLite - autoquery_data.db):
 
-         `ad_table`: Ad listing details.
-             `Maker` (TEXT)
-             `Genmodel` (TEXT)
-             `Genmodel_ID` (TEXT) - Join Key
-             `Adv_ID` (TEXT) - Ad unique ID
-             `Adv_year` (INTEGER)
-             `Adv_month` (INTEGER)
-             `Color` (TEXT)
-             `Reg_year` (REAL) - Registration Year
-             `Bodytype` (TEXT)
-             `Runned_Miles` (TEXT) - Requires CAST for numeric operations
-             `Engin_size` (TEXT) - Format '2.0L' etc. Requires REPLACE/CAST for numeric operations (see specific guidance)
-             `Gearbox` (TEXT)
-             `Fuel_type` (TEXT)
-             `Price` (TEXT) - Requires CAST for numeric operations
-             `Seat_num` (REAL)
-             `Door_num` (REAL)
+        `basic_table`: Basic mapping of manufacturers to models. Use this table to filter by `Automaker`.
+            `Automaker` (TEXT)
+            `Automaker_ID` (INTEGER)
+            `Genmodel` (TEXT)
+            `Genmodel_ID` (TEXT)
 
-         `price_table`: Model entry prices by year.
-             `Maker` (TEXT)
-             `Genmodel` (TEXT)
-             `Genmodel_ID` (TEXT) - Join Key
-             `Year` (INTEGER)
-             `Entry_price` (INTEGER) - No CAST needed
+        `price_table`: Contains the manufacturer's suggested retail price (entry price) by model and year.
+            `Maker` (TEXT)
+            `Genmodel` (TEXT)
+            `Genmodel_ID` (TEXT)
+            `Year` (INTEGER)
+            `Entry_price` (INTEGER)
 
-         `sales_table`: Annual sales figures.
-             `Maker` (TEXT)
-             `Genmodel` (TEXT)
-             `Genmodel_ID` (TEXT) - Join Key
-             "2001" (INTEGER)
-             "2002" (INTEGER)
-             "2003" (INTEGER)
-             "2004" (INTEGER)
-             "2005" (INTEGER)
-             "2006" (INTEGER)
-             "2007" (INTEGER)
-             "2008" (INTEGER)
-             "2009" (INTEGER)
-             "2010" (INTEGER)
-             "2011" (INTEGER)
-             "2012" (INTEGER)
-             "2013" (INTEGER)
-             "2014" (INTEGER)
-             "2015" (INTEGER)
-             "2016" (INTEGER)
-             "2017" (INTEGER)
-             "2018" (INTEGER)
-             "2019" (INTEGER)
-             "2020" (INTEGER)
+        `sales_table`: Contains annual sales figures for each model. Column names are years (e.g., "2020").
+            `Maker` (TEXT)
+            `Genmodel` (TEXT)
+            `Genmodel_ID` (TEXT)
+            `2020` (INTEGER)
+            `2019` (INTEGER)
+            `2018` (INTEGER)
+            `2017` (INTEGER)
+            `2016` (INTEGER)
+            `2015` (INTEGER)
+            `2014` (INTEGER)
+            `2013` (INTEGER)
+            `2012` (INTEGER)
+            `2011` (INTEGER)
+            `2010` (INTEGER)
+            `2009` (INTEGER)
+            `2008` (INTEGER)
+            `2007` (INTEGER)
+            `2006` (INTEGER)
+            `2005` (INTEGER)
+            `2004` (INTEGER)
+            `2003` (INTEGER)
+            `2002` (INTEGER)
+            `2001` (INTEGER)
 
-         `basic_table`: Basic Maker/Model mapping.
-             `Automaker` (TEXT) - Use THIS for filtering by Manufacturer!
-             `Automaker_ID` (INTEGER)
-             `Genmodel` (TEXT)
-             `Genmodel_ID` (TEXT) - Join Key
+        `trim_table`: Contains details for specific trim levels of a model.
+            `Genmodel_ID` (TEXT)
+            `Maker` (TEXT)
+            `Genmodel` (TEXT)
+            `Trim` (TEXT)
+            `Year` (INTEGER)
+            `Price` (INTEGER)
+            `Gas_emission` (INTEGER)
+            `Fuel_type` (TEXT)
+            `Engine_size` (INTEGER)
 
-         `trim_table`: Trim level details.
-             `Genmodel_ID` (TEXT) - Join Key
-             `Maker` (TEXT)
-             `Genmodel` (TEXT)
-             `Trim` (TEXT)
-             `Year` (INTEGER)
-             `Price` (INTEGER) - No CAST needed
-             `Gas_emission` (INTEGER)
-             `Fuel_type` (TEXT)
-             `Engine_size` (INTEGER) - Likely CCs. Use directly for numeric ops. Different from ad_table.Engin_size!
+        `vehicle_ads`: Contains detailed, cleaned information about individual vehicle sale listings.
+            `Maker` (TEXT)
+            `Genmodel` (TEXT)
+            `Genmodel_ID` (TEXT)
+            `Adv_year` (INTEGER)
+            `Adv_month` (INTEGER)
+            `Color` (TEXT)
+            `Reg_year` (INTEGER)
+            `Bodytype` (TEXT)
+            `Runned_Miles` (INTEGER)
+            `Engin_size` (REAL)
+            `Gearbox` (TEXT)
+            `Fuel_type` (TEXT)
+            `Price` (INTEGER)
+            `Engine_power` (REAL)
+            `Wheelbase` (REAL)
+            `Height` (REAL)
+            `Width` (REAL)
+            `Length` (REAL)
+            `Average_mpg` (REAL)
+            `Top_speed` (REAL)
+            `Seat_num` (INTEGER)
+            `Door_num` (INTEGER)
 
         Query Best Practices & Specific Guidance (SQLite):
-         Use Existing Columns Only: Do not attempt to query columns not listed in the schema above (like `Engine_power`, `Average_mpg`). State that this specific info is unavailable.
-         Use DISTINCT: Use `SELECT DISTINCT` when asked for unique values/items/models or unique car listings.
-         Maker/Automaker Filtering (CRITICAL): ALWAYS use `Automaker` from `basic_table` for manufacturer filters. MUST JOIN `basic_table` using `Genmodel_ID`.
-         Case-Insensitive Filtering (CRITICAL): ALWAYS use `UPPER()` on both column and value for ALL string comparisons in WHERE clauses.
-         Ambiguous Columns: Always qualify columns with table alias/name in `SELECT`/`WHERE` when joining.
-         Body Types: If user asks for 'Station wagon', use `WHERE UPPER(Bodytype) = UPPER('Estate')`.
-         Numeric Operations on TEXT (CRITICAL): `ad_table.Price` and `ad_table.Runned_Miles` are TEXT. You absolutely MUST use `CAST(column AS INTEGER/REAL)` before numeric sorting, comparison, range checks, or aggregation. Handle potential commas: `CAST(REPLACE(column, ',', '') AS REAL)`.
-         Engine Size Handling (CRITICAL & Nuanced):
-             `ad_table.Engin_size` is TEXT (e.g., '2.0L'). For numeric ops interpreting as Liters: You MUST use `CAST(REPLACE(Engin_size, 'L', '') AS REAL)`. Apply filters AFTER conversion (e.g., `WHERE CAST(REPLACE(...) AS REAL) < 1.2`). Sort using the conversion. DO NOT state 'Liters not available'; perform the calculation.
-             `trim_table.Engine_size` is INTEGER (likely CCs). Use directly for numeric ops if querying `trim_table`. Specify which engine size you are reporting if context is ambiguous.
-         Sales Years (`sales_table`): Columns "2001" to "2020" are INTEGER. Still MUST use double quotes for column names (e.g., "2001", "2002", ... "2020"). No `CAST` needed. Use `COALESCE("YYYY", 0)` when summing.
-         Listing Categories: Use `SELECT DISTINCT column_name FROM relevant_table WHERE column_name IS NOT NULL AND column_name != '';`. Present ALL unique values. Handle empty string `""` gracefully (usually omit).
-         Finding Missing Data: You MUST FIRST execute `WHERE column_name IS NULL OR column_name = ''`. If zero rows returned, THEN state no rows found with missing data.
-         Finding Most Common: Use `SELECT column_name, COUNT() as count FROM table_name WHERE column_name IS NOT NULL AND column_name != '' GROUP BY column_name ORDER BY count DESC LIMIT 1;`.
-         Top N Results: Use `LIMIT N`. Combine with `DISTINCT` appropriately.
-
-        Final Output: MUST be user-friendly natural language text answering the query OR explaining unavailability based on the schema. Use Markdown lists (`` or `1.`). Apply ALL user constraints.
-        """
+          Use Existing Columns Only: Do not attempt to query columns not listed in the schema above.
+          Use DISTINCT: Use `SELECT DISTINCT` when asked for unique values, items, models, or car listings.
+          Maker/Automaker Filtering (CRITICAL): ALWAYS use `Automaker` from `basic_table` for manufacturer filters. You MUST JOIN `basic_table` with another table using `Genmodel_ID`.
+          Case-Insensitive Filtering (CRITICAL): ALWAYS use `UPPER()` on both the column and the value for ALL string comparisons in WHERE clauses (e.g., `WHERE UPPER(Color) = UPPER('Blue')`).
+          Ambiguous Columns: Always qualify columns with the table name or alias in `SELECT` and `WHERE` clauses when performing a JOIN (e.g., `vehicle_ads.Price`, `trim_table.Price`).
+          Body Types: If a user asks for 'Station wagon', you should query for 'Estate' (e.g., `WHERE UPPER(Bodytype) = UPPER('Estate')`).
+          Numeric Columns are Clean: All columns in the `vehicle_ads` table with numeric types (INTEGER, REAL) are cleaned. You do NOT need to use `CAST` or `REPLACE` for sorting, comparison, or aggregation. You can use them directly (e.g., `WHERE Price > 20000`).
+          Sales Years (`sales_table`): The columns for years ("2001" to "2020") are INTEGERs. You MUST use double quotes for these column names in your queries (e.g., `SELECT "2015", "2016" FROM sales_table`).
+          Finding Most Common: Use `SELECT column_name, COUNT(*) as count FROM table_name WHERE column_name IS NOT NULL AND column_name != '' GROUP BY column_name ORDER BY count DESC LIMIT 1;`.
+          Top N Results: Use `LIMIT N`, combined with `ORDER BY` and `DISTINCT` where appropriate.
+    """
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_message),
