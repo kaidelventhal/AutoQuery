@@ -49,25 +49,3 @@ Here are a few example questions you can ask to test the agent's capabilities:
     * `What data do you have for the 'CyberTruck' model?` (Agent should report no data found if it's not in the tables)
 
 Feel free to experiment with different combinations of makes, models, years, colors, features, etc.!
-
-## Tech Stack
-
-* **Cloud Platform:** Google Cloud
-    * **Compute:** App Engine Standard (Python 3.12 Runtime)
-    * **Storage:** Cloud Storage (for CSV data)
-    * **AI:** Vertex AI (Gemini Flash Lite Model)
-* **Backend:**
-    * **Language:** Python
-    * **Framework:** Flask
-    * **Web Server:** Gunicorn (with `gthread` workers)
-    * **API Communication:** Flask-CORS
-* **AI Orchestration:** LangChain (AgentExecutor, Tools, Prompts)
-* **Data Querying:** Pandas, sqlite
-* **Frontend:** HTML JavaScript
-
-## Key Features
-
-* **Natural Language Interface**: Ask questions in plain English to query vehicle data.
-* **Agentic SQL Generation**: Converts natural language to sqlite queries using an LLM agent.
-* **Cloud-Native Deployment**: Runs efficiently on Google App Engine, utilizing Cloud Storage for data.
-* **Error Handling**: Agent attempts to identify and report SQL execution errors.
